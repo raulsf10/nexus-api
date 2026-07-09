@@ -4,6 +4,7 @@ export interface ConfiguracionAppSeccion {
   nombre: string;
   prefijoApi: string;
   estaticosDirectorio: string;
+  cargaMasivaMaxFilas: number;
 }
 
 export interface ConfiguracionOracleSeccion {

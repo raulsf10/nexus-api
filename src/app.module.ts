@@ -12,6 +12,8 @@ import { JwtGuard } from './modulos/autenticacion/guardias/jwt.guard';
 import { UsuariosModule } from './modulos/usuarios/usuarios.module';
 import { InformesModule } from './modulos/informes/informes.module';
 import { CarnetModule } from './modulos/carnet/carnet.module';
+import { CargaMasivaModule } from './modulos/carga-masiva/carga-masiva.module';
+import { HistorialCarnetModule } from './modulos/historial-carnet/historial-carnet.module';
 
 @Module({
   imports: [
@@ -39,6 +41,8 @@ import { CarnetModule } from './modulos/carnet/carnet.module';
     UsuariosModule,
     InformesModule,
     CarnetModule,
+    CargaMasivaModule,
+    HistorialCarnetModule,
   ],
   providers: [
     {

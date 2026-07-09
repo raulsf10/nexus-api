@@ -5,6 +5,7 @@ export const esquemaValidacionEnv = Joi.object({
   APP_AMBIENTE: Joi.string().valid('desarrollo', 'pruebas', 'produccion').required(),
   APP_NOMBRE: Joi.string().required(),
   APP_PREFIJO_API: Joi.string().default('api'),
+  CARGA_MASIVA_MAX_FILAS: Joi.number().integer().min(1).default(500),
 
   JWT_SECRETO: Joi.string().min(16).required(),
   JWT_EXPIRA_EN: Joi.string().default('8h'),
@@ -28,13 +29,13 @@ export const esquemaValidacionEnv = Joi.object({
   SQLSERVER_POOL_MAX: Joi.number().integer().min(1).default(5),
 
   AD_DOMINIO: Joi.string().required(),
-  AD_URL: Joi.string().uri({ scheme: ['ldap', 'ldaps'] }).required(),
+  AD_URL: Joi.string()
+    .uri({ scheme: ['ldap', 'ldaps'] })
+    .required(),
   AD_BASE_DN: Joi.string().required(),
 
   LOG_DIRECTORIO: Joi.string().required(),
-  LOG_NIVEL: Joi.string()
-    .valid('trace', 'debug', 'info', 'warn', 'error', 'fatal')
-    .default('info'),
+  LOG_NIVEL: Joi.string().valid('trace', 'debug', 'info', 'warn', 'error', 'fatal').default('info'),
   LOG_RETENCION_DIAS: Joi.number().integer().min(1).default(30),
 
   ESTATICOS_DIRECTORIO: Joi.string().default('./public'),

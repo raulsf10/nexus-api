@@ -20,6 +20,7 @@ export class ConfiguracionService {
       nombre: this.leerTexto('APP_NOMBRE'),
       prefijoApi: this.leerTexto('APP_PREFIJO_API'),
       estaticosDirectorio: this.leerTexto('ESTATICOS_DIRECTORIO'),
+      cargaMasivaMaxFilas: this.leerNumero('CARGA_MASIVA_MAX_FILAS'),
     };
   }
 

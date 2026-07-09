@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, HttpCode, HttpStatus, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { UsuarioActual } from '../../comun/decoradores/usuario-actual.decorator';
+import { UsuarioJwtInterface } from '../../comun/interfaces/usuario-jwt.interface';
 import { CarnetService } from './carnet.service';
 import { ActualizarActivoDto } from './dto/actualizar-activo.dto';
 import { ActualizarFrecuenciaDto } from './dto/actualizar-frecuencia.dto';
@@ -17,16 +19,22 @@ export class CarnetController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Asigna un informe a una posición (dual-write Oracle + SQL Server).' })
-  async agregar(@Body() dto: AgregarCarnetDto): Promise<RespuestaCarnet> {
-    await this.servicio.agregar(dto.skEmpleado, dto.fkVeo);
+  async agregar(
+    @Body() dto: AgregarCarnetDto,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
+  ): Promise<RespuestaCarnet> {
+    await this.servicio.agregar(dto.skEmpleado, dto.fkVeo, usuario.usuario);
     return { exitoso: true };
   }
 
   @Patch('activo')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Activa o desactiva un informe del carnet.' })
-  async actualizarActivo(@Body() dto: ActualizarActivoDto): Promise<RespuestaCarnet> {
-    await this.servicio.actualizarActivo(dto.skEmpleado, dto.fkVeo, dto.activo);
+  async actualizarActivo(
+    @Body() dto: ActualizarActivoDto,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
+  ): Promise<RespuestaCarnet> {
+    await this.servicio.actualizarActivo(dto.skEmpleado, dto.fkVeo, dto.activo, usuario.usuario);
     return { exitoso: true };
   }
 
@@ -35,16 +43,25 @@ export class CarnetController {
   @ApiOperation({ summary: 'Actualiza la frecuencia de un informe del carnet.' })
   async actualizarFrecuencia(
     @Body() dto: ActualizarFrecuenciaDto,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
   ): Promise<RespuestaCarnet> {
-    await this.servicio.actualizarFrecuencia(dto.skEmpleado, dto.fkVeo, dto.frecuencia);
+    await this.servicio.actualizarFrecuencia(
+      dto.skEmpleado,
+      dto.fkVeo,
+      dto.frecuencia,
+      usuario.usuario,
+    );
     return { exitoso: true };
   }
 
   @Delete()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Elimina la asignación de un informe a una posición.' })
-  async eliminar(@Body() dto: EliminarCarnetDto): Promise<RespuestaCarnet> {
-    await this.servicio.eliminar(dto.skEmpleado, dto.fkVeo);
+  async eliminar(
+    @Body() dto: EliminarCarnetDto,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
+  ): Promise<RespuestaCarnet> {
+    await this.servicio.eliminar(dto.skEmpleado, dto.fkVeo, usuario.usuario);
     return { exitoso: true };
   }
 }

@@ -41,6 +41,21 @@ export class InformesRepository {
     }));
   }
 
+  async obtenerPorSkVeo(skVeo: number): Promise<InformeEntidad | null> {
+    const sql = `
+      SELECT sk_veo, dsnombrelargo
+      FROM dwh_suka.dim_veo
+      WHERE sk_veo = :skVeo
+    `;
+    const filas = await this.oracle.ejecutar<FilaOracle>(sql, { skVeo });
+    if (filas.length === 0) return null;
+    const r = filas[0];
+    return {
+      skVeo: Number(r['SK_VEO']),
+      nombre: String(r['DSNOMBRELARGO'] ?? '').trim(),
+    };
+  }
+
   async obtenerFrecuenciasDisponibles(): Promise<string[]> {
     const sql = `
       SELECT DISTINCT frecuencia
@@ -49,8 +64,6 @@ export class InformesRepository {
       ORDER BY frecuencia
     `;
     const filas = await this.oracle.ejecutar<FilaOracle>(sql);
-    return filas
-      .map((r) => String(r['FRECUENCIA'] ?? '').trim())
-      .filter((s) => s.length > 0);
+    return filas.map((r) => String(r['FRECUENCIA'] ?? '').trim()).filter((s) => s.length > 0);
   }
 }

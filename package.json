@@ -12,8 +12,12 @@
     "build": "nest build",
     "start": "node dist/main",
     "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
-    "lint": "eslint \"{src,apps,libs}/**/*.ts\" --fix"
+    "lint": "eslint \"{src,apps,libs}/**/*.ts\" --fix",
+    "lint:check": "eslint \"{src,apps,libs}/**/*.ts\"",
+    "validar": "npm run build",
+    "publicar": "powershell -NoProfile -ExecutionPolicy Bypass -File ./publicar.ps1"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",
@@ -26,6 +30,7 @@
     "@nestjs/swagger": "^7.4.0",
     "class-transformer": "^0.5.0",
     "class-validator": "^0.14.0",
+    "exceljs": "^4.4.0",
     "joi": "^17.13.0",
     "ldapjs": "^3.0.0",
     "mssql": "^11.0.1",

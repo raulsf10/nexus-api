@@ -1,11 +1,13 @@
 node_modules/
 dist/
 
+# Variables de entorno: nunca versionar (contienen credenciales).
+# Solo .env.example se versiona como plantilla.
 .env
-.env.development
-.env.production
-.env.local
+.env.*
+!.env.example
 
+# Logs (la app escribe en C:\logs\nexus, fuera del repo)
 logs/
 *.log
 

@@ -8,8 +8,19 @@ import { ParametroSpInterface } from './interfaces/parametro-sp.interface';
 
 const NOMBRE_POOL = 'NEXUS_ORACLE_POOL';
 
+// Abstrae el destino de una operación Oracle: puede ser el servicio (cada
+// operación con su propia conexión y autoCommit) o una transacción en curso
+// (todas las operaciones sobre la misma conexión, commit/rollback al final).
+export interface EjecutorOracle {
+  ejecutar<T = Record<string, unknown>>(
+    sql: string,
+    parametros?: Record<string, unknown>,
+  ): Promise<T[]>;
+  ejecutarSp(nombreSp: string, parametros: ParametroSpInterface[]): Promise<void>;
+}
+
 @Injectable()
-export class OracleService implements OnModuleInit, OnModuleDestroy {
+export class OracleService implements OnModuleInit, OnModuleDestroy, EjecutorOracle {
   private pool?: oracledb.Pool;
 
   constructor(
@@ -78,9 +89,52 @@ export class OracleService implements OnModuleInit, OnModuleDestroy {
   ): Promise<T[]> {
     const conexion = await this.obtenerConexion();
     try {
+      return await this.correrConsulta<T>(conexion, sql, parametros, true);
+    } finally {
+      await this.cerrarConexion(conexion);
+    }
+  }
+
+  async ejecutarSp(nombreSp: string, parametros: ParametroSpInterface[]): Promise<void> {
+    const conexion = await this.obtenerConexion();
+    try {
+      await this.correrSp(conexion, nombreSp, parametros, true);
+    } finally {
+      await this.cerrarConexion(conexion);
+    }
+  }
+
+  // Ejecuta `trabajo` con todas sus operaciones sobre una única conexión sin
+  // autoCommit. Si `trabajo` resuelve, hace commit; si lanza, hace rollback y
+  // re-lanza. Es todo-o-nada: pensado para lotes (carga masiva).
+  async ejecutarEnTransaccion<T>(trabajo: (ejecutor: EjecutorOracle) => Promise<T>): Promise<T> {
+    const conexion = await this.obtenerConexion();
+    const ejecutor: EjecutorOracle = {
+      ejecutar: (sql, parametros = {}) => this.correrConsulta(conexion, sql, parametros, false),
+      ejecutarSp: (nombreSp, parametros) => this.correrSp(conexion, nombreSp, parametros, false),
+    };
+    try {
+      const resultado = await trabajo(ejecutor);
+      await conexion.commit();
+      return resultado;
+    } catch (error) {
+      await this.revertir(conexion);
+      throw error;
+    } finally {
+      await this.cerrarConexion(conexion);
+    }
+  }
+
+  private async correrConsulta<T>(
+    conexion: oracledb.Connection,
+    sql: string,
+    parametros: Record<string, unknown>,
+    autoCommit: boolean,
+  ): Promise<T[]> {
+    try {
       const resultado = await conexion.execute<T>(sql, parametros as oracledb.BindParameters, {
         outFormat: oracledb.OUT_FORMAT_OBJECT,
-        autoCommit: true,
+        autoCommit,
       });
       return (resultado.rows ?? []) as T[];
     } catch (error) {
@@ -93,18 +147,20 @@ export class OracleService implements OnModuleInit, OnModuleDestroy {
         'Error al ejecutar consulta en Oracle.',
         500,
       );
-    } finally {
-      await this.cerrarConexion(conexion);
     }
   }
 
-  async ejecutarSp(nombreSp: string, parametros: ParametroSpInterface[]): Promise<void> {
-    const conexion = await this.obtenerConexion();
+  private async correrSp(
+    conexion: oracledb.Connection,
+    nombreSp: string,
+    parametros: ParametroSpInterface[],
+    autoCommit: boolean,
+  ): Promise<void> {
     try {
       const binds = this.construirBindsSp(parametros);
       const placeholders = parametros.map((p) => `:${p.nombre}`).join(', ');
       const sql = `BEGIN ${nombreSp}(${placeholders}); END;`;
-      await conexion.execute(sql, binds, { autoCommit: true });
+      await conexion.execute(sql, binds, { autoCommit });
     } catch (error) {
       this.logger.error('Error ejecutando SP en Oracle', error, {
         sp: nombreSp,
@@ -117,8 +173,16 @@ export class OracleService implements OnModuleInit, OnModuleDestroy {
         `Error al ejecutar el stored procedure ${nombreSp}.`,
         500,
       );
-    } finally {
-      await this.cerrarConexion(conexion);
+    }
+  }
+
+  private async revertir(conexion: oracledb.Connection): Promise<void> {
+    try {
+      await conexion.rollback();
+    } catch (error) {
+      this.logger.advertencia('No fue posible revertir la transacción Oracle', {
+        error: (error as Error).message,
+      });
     }
   }
 
