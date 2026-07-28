@@ -9,19 +9,17 @@ export class UsuariosRepository {
   constructor(private readonly oracle: OracleService) {}
 
   async buscarPorTexto(texto: string): Promise<UsuarioListadoEntidad[]> {
-    // "posición" en el dominio = sk_empleado (lo que usa dim_veo_carnet.fk_posicion).
-    // Se busca por descripción, sk_empleado e idempleado para soportar texto y números.
     const sql = `
       SELECT * FROM (
-        SELECT DISTINCT dim.sk_empleado, dim.idempleado, dim.descripcion, dim.puesto, dim.pseunonimo, win.sk_usuario_win
-        FROM dwh_suka.dim_hk_usuarios dim
-        LEFT JOIN dwh_suka.dim_hk_usuarios_windows win ON dim.sk_empleado = win.fk_empleado
-        WHERE (UPPER(dim.descripcion) LIKE UPPER('%' || :texto || '%')
-               OR TO_CHAR(dim.sk_empleado) LIKE '%' || :texto || '%'
-               OR TO_CHAR(dim.idempleado) LIKE '%' || :texto || '%')
-          AND dim.puesto IS NOT NULL
-          AND dim.descripcion IS NOT NULL
-        ORDER BY dim.descripcion
+        SELECT DISTINCT pos.IDOBJ, pos.NUM_EMPLEADO, pos.NOMBRE_COMPLETO, pos.DENOMINACION_OBJETO, win.sk_usuario_win
+        FROM dwh_suka.STG_RH_POSISIONES_ACTIVAS pos
+        LEFT JOIN dwh_suka.dim_hk_usuarios_windows win ON pos.IDOBJ = win.fk_empleado
+        WHERE (UPPER(pos.NOMBRE_COMPLETO) LIKE UPPER('%' || :texto || '%')
+               OR TO_CHAR(pos.IDOBJ) LIKE '%' || :texto || '%'
+               OR TO_CHAR(pos.NUM_EMPLEADO) LIKE '%' || :texto || '%')
+          AND pos.DENOMINACION_OBJETO IS NOT NULL
+          AND pos.NOMBRE_COMPLETO IS NOT NULL
+        ORDER BY pos.NOMBRE_COMPLETO
       ) WHERE ROWNUM <= 50
     `;
     const filas = await this.oracle.ejecutar<FilaUsuario>(sql, { texto });
@@ -30,10 +28,10 @@ export class UsuariosRepository {
 
   async obtenerPorSkEmpleado(skEmpleado: number): Promise<UsuarioListadoEntidad | null> {
     const sql = `
-      SELECT DISTINCT dim.sk_empleado, dim.idempleado, dim.descripcion, dim.puesto, dim.pseunonimo, win.sk_usuario_win
-      FROM dwh_suka.dim_hk_usuarios dim
-      LEFT JOIN dwh_suka.dim_hk_usuarios_windows win ON dim.sk_empleado = win.fk_empleado
-      WHERE dim.sk_empleado = :skEmpleado
+      SELECT DISTINCT pos.IDOBJ, pos.NUM_EMPLEADO, pos.NOMBRE_COMPLETO, pos.DENOMINACION_OBJETO, win.sk_usuario_win
+      FROM dwh_suka.STG_RH_POSISIONES_ACTIVAS pos
+      LEFT JOIN dwh_suka.dim_hk_usuarios_windows win ON pos.IDOBJ = win.fk_empleado
+      WHERE pos.IDOBJ = :skEmpleado
     `;
     const filas = await this.oracle.ejecutar<FilaUsuario>(sql, { skEmpleado });
     return filas.length > 0 ? this.mapearFila(filas[0]) : null;
@@ -41,11 +39,10 @@ export class UsuariosRepository {
 
   private mapearFila(r: FilaUsuario): UsuarioListadoEntidad {
     return {
-      skEmpleado: Number(r['SK_EMPLEADO']),
-      idEmpleado: Number(r['IDEMPLEADO']),
-      descripcion: String(r['DESCRIPCION'] ?? '').trim(),
-      puesto: String(r['PUESTO'] ?? '').trim(),
-      pseudonimo: r['PSEUNONIMO'] ? String(r['PSEUNONIMO']).trim() : null,
+      skEmpleado: Number(r['IDOBJ']),
+      idEmpleado: Number(r['NUM_EMPLEADO']),
+      descripcion: String(r['NOMBRE_COMPLETO'] ?? '').trim(),
+      puesto: String(r['DENOMINACION_OBJETO'] ?? '').trim(),
       usuarioWin: r['SK_USUARIO_WIN'] ? String(r['SK_USUARIO_WIN']).trim() : null,
     };
   }
