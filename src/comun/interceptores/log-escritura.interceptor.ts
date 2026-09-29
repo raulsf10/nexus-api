@@ -11,9 +11,7 @@ export class LogEscrituraInterceptor implements NestInterceptor {
   constructor(private readonly logger: LoggerService) {}
 
   intercept(contexto: ExecutionContext, next: CallHandler): Observable<unknown> {
-    const peticion = contexto
-      .switchToHttp()
-      .getRequest<Request & { user?: UsuarioJwtInterface }>();
+    const peticion = contexto.switchToHttp().getRequest<Request & { user?: UsuarioJwtInterface }>();
     const metodo = peticion.method.toUpperCase();
 
     if (!METODOS_ESCRITURA.has(metodo)) {
@@ -22,7 +20,9 @@ export class LogEscrituraInterceptor implements NestInterceptor {
 
     const ruta = peticion.url;
     const usuario = peticion.user?.usuario;
-    const payload = (peticion.body ?? undefined) as Record<string, unknown> | undefined;
+    const payload = ruta.split('?')[0].endsWith('/notificaciones-carnet/personalizados')
+      ? undefined
+      : ((peticion.body ?? undefined) as Record<string, unknown> | undefined);
 
     return next.handle().pipe(
       tap(() => {

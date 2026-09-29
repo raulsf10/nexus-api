@@ -8,4 +8,5 @@ export interface InformeAsignadoEntidad {
   nombre: string;
   activo: number;
   frecuencia: string | null;
+  estatusInstalacion: string | null;
 }

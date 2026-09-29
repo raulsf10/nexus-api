@@ -11,6 +11,8 @@ import { OrigenHistorial } from '../historial-carnet/enums/origen-historial.enum
 import { HistorialCarnetService } from '../historial-carnet/historial-carnet.service';
 import { InformeEntidad } from '../informes/entidades/informe.entidad';
 import { InformesRepository } from '../informes/informes.repository';
+import { NotificacionesCarnetService } from '../notificaciones-carnet/notificaciones-carnet.service';
+import { CambioCarnetCorreo } from '../notificaciones-carnet/interfaces/cambio-carnet-correo.interface';
 import { UsuarioListadoEntidad } from '../usuarios/entidades/usuario-listado.entidad';
 import { UsuariosRepository } from '../usuarios/usuarios.repository';
 import { FRECUENCIAS_VALIDAS } from './carga-masiva.constantes';
@@ -19,6 +21,7 @@ import { CodigoErrorFila } from './enums/codigo-error-fila.enum';
 import { OperacionCarga } from './enums/operacion-carga.enum';
 import { FilaCruda, LectorExcelService } from './lector-excel.service';
 import { ResultadoProceso } from './interfaces/resultado-proceso.interface';
+import { SlaCarnetService } from '../notificaciones-carnet/sla-carnet.service';
 import {
   ErrorFila,
   FilaValidada,
@@ -53,6 +56,7 @@ interface PlanFila {
   mensaje: string;
   insertar: boolean;
   reactivar: boolean;
+  activacionDiferida: boolean;
   frecuenciaActualizar: string | null;
   eliminar: boolean;
 }
@@ -68,9 +72,11 @@ export class CargaMasivaService {
     private readonly carnetOracle: CarnetRepositoryOracle,
     private readonly carnetSqlServer: CarnetRepositorySqlServer,
     private readonly historial: HistorialCarnetService,
+    private readonly notificaciones: NotificacionesCarnetService,
     private readonly oracle: OracleService,
     private readonly logger: LoggerService,
     configuracion: ConfiguracionService,
+    private readonly sla: SlaCarnetService,
   ) {
     this.maxFilas = configuracion.obtenerApp().cargaMasivaMaxFilas;
   }
@@ -124,11 +130,19 @@ export class CargaMasivaService {
       });
     }
 
+    if (operacion === OperacionCarga.ASIGNACION) {
+      await this.sla.asegurarDisponible(preparadas.map((fila) => fila.idInforme));
+    }
     let planes: PlanFila[];
+    let cambios: CambioCarnetCorreo[] = [];
+    let avisosPreparados: string[] = [];
     try {
-      planes = await this.oracle.ejecutarEnTransaccion((ejecutor) =>
-        this.aplicarLoteOracle(operacion, preparadas, ejecutor),
-      );
+      planes = await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
+        const resultado = await this.aplicarLoteOracle(operacion, preparadas, ejecutor);
+        cambios = this.crearCambiosLote(resultado, usuario);
+        avisosPreparados = await this.sla.prepararAsignaciones(cambios, ejecutor);
+        return resultado;
+      });
     } catch (error) {
       // La transacción Oracle se revirtió por completo: ninguna fila se aplicó.
       const mensaje = `Lote revertido: ${this.mensajeError(error, operacion)}`;
@@ -150,6 +164,8 @@ export class CargaMasivaService {
     // fallos se registran pero no revierten ni fallan la respuesta.
     await this.replicarEnSqlServer(operacion, planes);
     await this.registrarHistorialLote(operacion, planes, usuario);
+    await this.sla.confirmarAsignaciones(avisosPreparados);
+    await this.notificaciones.enviarCambios(cambios);
 
     return {
       total: planes.length,
@@ -172,6 +188,21 @@ export class CargaMasivaService {
     const planes: PlanFila[] = [];
     for (const f of filas) {
       if (operacion === OperacionCarga.ELIMINACION) {
+        const asignacion = await this.carnetOracle.obtenerAsignacion(
+          f.idPosicion,
+          f.idInforme,
+          ejecutor,
+          true,
+        );
+        if (!asignacion) {
+          planes.push({
+            ...this.planEliminacion(f),
+            eliminar: false,
+            mensaje: 'Sin cambios (ya estaba retirado).',
+          });
+          continue;
+        }
+        await this.sla.cancelarAsignacion(f.idPosicion, f.idInforme);
         await this.carnetOracle.eliminar(f.idPosicion, f.idInforme, ejecutor);
         planes.push(this.planEliminacion(f));
         continue;
@@ -189,10 +220,15 @@ export class CargaMasivaService {
       f.idPosicion,
       f.idInforme,
       ejecutor,
+      true,
     );
+    const aplicaSla = this.sla.aplica(f.idInforme);
 
     if (asignacion === null) {
       await this.carnetOracle.agregar(f.idPosicion, f.idInforme, ejecutor);
+      if (aplicaSla) {
+        await this.carnetOracle.actualizarActivo(f.idPosicion, f.idInforme, 0, ejecutor);
+      }
       if (f.frecuencia !== null) {
         await this.carnetOracle.actualizarFrecuencia(
           f.idPosicion,
@@ -204,9 +240,10 @@ export class CargaMasivaService {
       return {
         idPosicion: f.idPosicion,
         idInforme: f.idInforme,
-        mensaje: 'Asignado.',
+        mensaje: aplicaSla ? 'Asignado inactivo; pendiente de SLA y aviso final.' : 'Asignado.',
         insertar: true,
         reactivar: false,
+        activacionDiferida: aplicaSla,
         frecuenciaActualizar: f.frecuencia,
         eliminar: false,
       };
@@ -216,9 +253,14 @@ export class CargaMasivaService {
     let reactivar = false;
     let frecuenciaActualizar: string | null = null;
     if (asignacion.activo === 0) {
-      await this.carnetOracle.actualizarActivo(f.idPosicion, f.idInforme, 1, ejecutor);
-      reactivar = true;
-      acciones.push('reactivado');
+      if (await this.sla.estaPendiente(f.idPosicion, f.idInforme)) {
+        acciones.push('permanece inactivo por SLA pendiente');
+      } else {
+        if (!aplicaSla)
+          await this.carnetOracle.actualizarActivo(f.idPosicion, f.idInforme, 1, ejecutor);
+        reactivar = true;
+        acciones.push(aplicaSla ? 'reactivación programada por SLA' : 'reactivado');
+      }
     }
     if (f.frecuencia !== null && !this.mismaFrecuencia(f.frecuencia, asignacion.frecuencia)) {
       await this.carnetOracle.actualizarFrecuencia(
@@ -241,6 +283,7 @@ export class CargaMasivaService {
       mensaje,
       insertar: false,
       reactivar,
+      activacionDiferida: reactivar && aplicaSla,
       frecuenciaActualizar,
       eliminar: false,
     };
@@ -280,7 +323,8 @@ export class CargaMasivaService {
 
   private accionDeHistorial(plan: PlanFila): AccionHistorial | null {
     if (plan.eliminar) return AccionHistorial.ELIMINAR;
-    if (plan.insertar) return AccionHistorial.ASIGNAR;
+    if (plan.insertar || (plan.reactivar && plan.activacionDiferida))
+      return AccionHistorial.ASIGNAR;
     if (plan.reactivar) return AccionHistorial.ACTIVAR;
     if (plan.frecuenciaActualizar !== null) return AccionHistorial.CAMBIO_FRECUENCIA;
     return null;
@@ -313,6 +357,7 @@ export class CargaMasivaService {
       mensaje: 'Eliminado.',
       insertar: false,
       reactivar: false,
+      activacionDiferida: false,
       frecuenciaActualizar: null,
       eliminar: true,
     };
@@ -326,10 +371,18 @@ export class CargaMasivaService {
           continue;
         }
         if (plan.insertar) {
-          await this.carnetSqlServer.agregar(plan.idPosicion, plan.idInforme);
+          await this.carnetSqlServer.agregar(
+            plan.idPosicion,
+            plan.idInforme,
+            plan.activacionDiferida ? 0 : 1,
+          );
         }
         if (plan.reactivar) {
-          await this.carnetSqlServer.actualizarActivo(plan.idPosicion, plan.idInforme, 1);
+          await this.carnetSqlServer.actualizarActivo(
+            plan.idPosicion,
+            plan.idInforme,
+            plan.activacionDiferida ? 0 : 1,
+          );
         }
         if (plan.frecuenciaActualizar !== null) {
           await this.carnetSqlServer.actualizarFrecuencia(
@@ -347,6 +400,34 @@ export class CargaMasivaService {
         });
       }
     }
+  }
+
+  private crearCambiosLote(planes: PlanFila[], usuario: string): CambioCarnetCorreo[] {
+    const cambios: CambioCarnetCorreo[] = [];
+    for (const plan of planes) {
+      if (plan.eliminar) {
+        cambios.push({
+          idPosicion: plan.idPosicion,
+          idInforme: plan.idInforme,
+          tipo: 'eliminacion',
+          usuario,
+          origen: 'Carga masiva',
+        });
+        continue;
+      }
+      // Una reactivación vuelve a dejar el informe disponible para la
+      // posición, por lo que se comunica igual que una asignación.
+      if (plan.insertar || plan.reactivar) {
+        cambios.push({
+          idPosicion: plan.idPosicion,
+          idInforme: plan.idInforme,
+          tipo: 'asignacion',
+          usuario,
+          origen: 'Carga masiva',
+        });
+      }
+    }
+    return cambios;
   }
 
   private async validar(
@@ -499,7 +580,7 @@ export class CargaMasivaService {
           errores.push({
             campo: 'general',
             codigo: CodigoErrorFila.REACTIVACION,
-            mensaje: `Está desactivado; al procesar se reactivará${
+            mensaje: `Está desactivado; al procesar se revisará su reactivación (respetando cualquier SLA pendiente)${
               cambiaFrecuencia ? ' y se ajustará la frecuencia' : ''
             }.`,
           });

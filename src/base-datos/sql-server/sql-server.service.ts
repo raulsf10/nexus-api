@@ -1,9 +1,14 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { ConnectionPool, IResult } from 'mssql';
+import { ConnectionPool, IResult, Transaction } from 'mssql';
 import { ConfiguracionService } from '../../configuracion/configuracion.service';
 import { CodigosError } from '../../comun/enums/codigos-error.enum';
 import { ExcepcionNegocio } from '../../comun/excepciones/excepcion-negocio';
 import { LoggerService } from '../../comun/logger/logger.service';
+
+export type EjecutorSqlServer = <T = Record<string, unknown>>(
+  sql: string,
+  parametros?: Record<string, unknown>,
+) => Promise<T[]>;
 
 @Injectable()
 export class SqlServerService implements OnModuleInit, OnModuleDestroy {
@@ -89,11 +94,69 @@ export class SqlServerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async ejecutarEnTransaccion<T>(trabajo: (ejecutor: EjecutorSqlServer) => Promise<T>): Promise<T> {
+    if (!this.pool || !this.pool.connected) {
+      throw new ExcepcionNegocio(
+        CodigosError.SQL_SERVER_ERROR,
+        'El pool de SQL Server no está disponible.',
+        503,
+      );
+    }
+
+    const transaccion = new Transaction(this.pool);
+    let iniciada = false;
+    try {
+      await transaccion.begin();
+      iniciada = true;
+
+      const ejecutar: EjecutorSqlServer = async <R = Record<string, unknown>>(
+        sql: string,
+        parametros: Record<string, unknown> = {},
+      ): Promise<R[]> => {
+        const peticion = transaccion.request();
+        for (const [nombre, valor] of Object.entries(parametros)) {
+          peticion.input(nombre, valor);
+        }
+        const resultado = (await peticion.query<R>(sql)) as IResult<R>;
+        return resultado.recordset as R[];
+      };
+
+      const resultado = await trabajo(ejecutar);
+      await transaccion.commit();
+      return resultado;
+    } catch (error) {
+      if (iniciada) {
+        try {
+          await transaccion.rollback();
+        } catch {
+          // La transacción puede haberse revertido automáticamente por SQL Server.
+        }
+      }
+      if (error instanceof ExcepcionNegocio) {
+        throw error;
+      }
+      this.logger.advertencia('Error ejecutando transacción en SQL Server', {
+        error: (error as Error).message,
+      });
+      throw new ExcepcionNegocio(
+        CodigosError.SQL_SERVER_ERROR,
+        'No se pudo completar la transacción en SQL Server.',
+        500,
+      );
+    }
+  }
+
   private sanitizarParametros(parametros: Record<string, unknown>): Record<string, unknown> {
     const clavesSensibles = ['contrasena', 'contraseña', 'password', 'secret'];
     const limpio: Record<string, unknown> = {};
     for (const [clave, valor] of Object.entries(parametros)) {
-      limpio[clave] = clavesSensibles.includes(clave.toLowerCase()) ? '[REDACTADO]' : valor;
+      if (clavesSensibles.includes(clave.toLowerCase())) {
+        limpio[clave] = '[REDACTADO]';
+      } else if (Buffer.isBuffer(valor)) {
+        limpio[clave] = `[BINARIO: ${valor.length} bytes]`;
+      } else {
+        limpio[clave] = valor;
+      }
     }
     return limpio;
   }

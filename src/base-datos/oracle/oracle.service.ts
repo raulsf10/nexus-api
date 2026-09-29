@@ -142,6 +142,42 @@ export class OracleService implements OnModuleInit, OnModuleDestroy, EjecutorOra
         sql,
         parametros: this.sanitizarParametros(parametros),
       });
+      const tablaNueva = sql.match(/\bdwh_suka\.(dim_ci_carnet_estatus|dim_ci_carnet_excepciones)\b/i)?.[1];
+      const esJtrac = /\bdwh_suka\.(dim_ci_jtrac_pdi|seq_ci_jtrac_pdi|vw_base_fabrica_v2)\b/i.test(
+        sql,
+      );
+      const numeroError = (error as { errorNum?: number }).errorNum;
+      if (esJtrac && [942, 1031, 2289, 904].includes(numeroError ?? 0)) {
+        throw new ExcepcionNegocio(
+          CodigosError.JTRAC_NO_DISPONIBLE,
+          'JTRAC–PDI no está disponible: revise la tabla DIM_CI_JTRAC_PDI, su estructura, la secuencia SEQ_CI_JTRAC_PDI y los permisos de CI_PANEL. La vista de folios y las excepciones requieren SELECT.',
+          503,
+        );
+      }
+      if (esJtrac && numeroError === 1) {
+        const esParejaDuplicada = (error as Error).message?.toUpperCase().includes('UQ_CI_JTRAC_PDI');
+        throw new ExcepcionNegocio(
+          CodigosError.RELACION_JTRAC_DUPLICADA,
+          esParejaDuplicada
+            ? 'Este PDI ya está relacionado con ese folio JTRAC.'
+            : 'Hay un ID de relación duplicado. El DBA debe revisar la secuencia SEQ_CI_JTRAC_PDI.',
+          409,
+        );
+      }
+      if (esJtrac && numeroError === 2291) {
+        throw new ExcepcionNegocio(
+          CodigosError.VALIDACION,
+          'El PDI indicado ya no existe en el catálogo. Selecciona otro informe.',
+          400,
+        );
+      }
+      if ((error as { errorNum?: number }).errorNum === 1031 && tablaNueva) {
+        throw new ExcepcionNegocio(
+          CodigosError.ORACLE_ERROR,
+          `La cuenta de conexión a Oracle necesita permisos SELECT, INSERT, UPDATE y DELETE sobre DWH_SUKA.${tablaNueva.toUpperCase()}. Solicite su aplicación al DBA.`,
+          503,
+        );
+      }
       throw new ExcepcionNegocio(
         CodigosError.ORACLE_ERROR,
         'Error al ejecutar consulta en Oracle.',

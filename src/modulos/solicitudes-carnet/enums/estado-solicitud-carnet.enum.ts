@@ -1,0 +1,12 @@
+export enum EstadoSolicitudCarnet {
+  PENDIENTE_REVISION = 'PENDIENTE_REVISION',
+  APROBADA = 'APROBADA',
+  APROBADA_PARCIAL = 'APROBADA_PARCIAL',
+  RECHAZADA = 'RECHAZADA',
+}
+
+export enum EstadoFilaSolicitudCarnet {
+  PENDIENTE = 'PENDIENTE',
+  APROBADA = 'APROBADA',
+  NO_APROBADA = 'NO_APROBADA',
+}

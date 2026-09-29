@@ -14,6 +14,8 @@ import { InformesModule } from './modulos/informes/informes.module';
 import { CarnetModule } from './modulos/carnet/carnet.module';
 import { CargaMasivaModule } from './modulos/carga-masiva/carga-masiva.module';
 import { HistorialCarnetModule } from './modulos/historial-carnet/historial-carnet.module';
+import { SolicitudesCarnetModule } from './modulos/solicitudes-carnet/solicitudes-carnet.module';
+import { JtracPdiModule } from './modulos/jtrac-pdi/jtrac-pdi.module';
 
 @Module({
   imports: [
@@ -43,6 +45,8 @@ import { HistorialCarnetModule } from './modulos/historial-carnet/historial-carn
     CarnetModule,
     CargaMasivaModule,
     HistorialCarnetModule,
+    SolicitudesCarnetModule,
+    JtracPdiModule,
   ],
   providers: [
     {

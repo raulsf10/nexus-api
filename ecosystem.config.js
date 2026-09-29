@@ -16,11 +16,14 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
+      // dotenv preload: @nestjs/config no carga .env.production por sí solo en producción.
+      node_args: `-r ${__dirname}/node_modules/dotenv/config.js`,
       env: {
         APP_AMBIENTE: 'desarrollo',
       },
       env_production: {
         APP_AMBIENTE: 'produccion',
+        DOTENV_CONFIG_PATH: `${__dirname}/.env.production`,
       },
       out_file: 'C:/logs/nexus/pm2-out.log',
       error_file: 'C:/logs/nexus/pm2-error.log',

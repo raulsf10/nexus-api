@@ -46,6 +46,23 @@ export interface ConfiguracionLogSeccion {
   retencionDias: number;
 }
 
+export interface ConfiguracionCorreoNotificacionesSeccion {
+  escalonadosActivos: boolean;
+  slaMinutos: number;
+  destinatariosIniciales: string[];
+  informesSla: number[];
+  zonaHoraria: string;
+  intervaloSegundos: number;
+  usarCorreoPosicion: boolean;
+  destinatariosDefault: string[];
+  destinatarioForzado: string;
+  host: string;
+  puerto: number;
+  usuario: string;
+  contrasena: string;
+  remitente: string;
+}
+
 export interface ConfiguracionAppInterface {
   app: ConfiguracionAppSeccion;
   oracle: ConfiguracionOracleSeccion;
@@ -53,4 +70,5 @@ export interface ConfiguracionAppInterface {
   jwt: ConfiguracionJwtSeccion;
   ad: ConfiguracionAdSeccion;
   log: ConfiguracionLogSeccion;
+  correoNotificaciones: ConfiguracionCorreoNotificacionesSeccion;
 }

@@ -1,11 +1,29 @@
 import { Injectable } from '@nestjs/common';
+import { CarnetEstatusInstalacionEsquemaService } from '../../base-datos/oracle/carnet-estatus-instalacion-esquema.service';
 import { EjecutorOracle, OracleService } from '../../base-datos/oracle/oracle.service';
+import { CodigosError } from '../../comun/enums/codigos-error.enum';
+import { ExcepcionNegocio } from '../../comun/excepciones/excepcion-negocio';
+import { EstatusInstalacion } from './enums/estatus-instalacion.enum';
 
 const NOMBRE_SP = 'dwh_suka.SP_CI_CARNET';
 
 @Injectable()
 export class CarnetRepositoryOracle {
-  constructor(private readonly oracle: OracleService) {}
+  constructor(
+    private readonly oracle: OracleService,
+    private readonly esquemaEstatusInstalacion: CarnetEstatusInstalacionEsquemaService,
+  ) {}
+
+  async asegurarEstatusInstalacionDisponible(): Promise<void> {
+    if (await this.esquemaEstatusInstalacion.estaDisponible()) {
+      return;
+    }
+    throw new ExcepcionNegocio(
+      CodigosError.VALIDACION,
+      'El estatus de instalación requiere aplicar primero la tabla externa de estatus.',
+      409,
+    );
+  }
 
   async existeAsignacion(
     skEmpleado: number,
@@ -26,20 +44,27 @@ export class CarnetRepositoryOracle {
     skEmpleado: number,
     fkVeo: number,
     ejecutor: EjecutorOracle = this.oracle,
-  ): Promise<{ activo: number; frecuencia: string | null } | null> {
+    bloquear = false,
+  ): Promise<{ idCarnet: string; activo: number; frecuencia: string | null } | null> {
     const sql = `
-      SELECT activo, frecuencia
+      SELECT TO_CHAR(sk_carnet) AS id_carnet, activo, frecuencia
       FROM dwh_suka.dim_veo_carnet
       WHERE fk_posicion = :skEmpleado AND fk_veo = :fkVeo
         AND ROWNUM = 1
+      ${bloquear ? 'FOR UPDATE' : ''}
     `;
-    const filas = await ejecutor.ejecutar<{ ACTIVO?: unknown; FRECUENCIA?: unknown }>(sql, {
+    const filas = await ejecutor.ejecutar<{
+      ID_CARNET: string;
+      ACTIVO?: unknown;
+      FRECUENCIA?: unknown;
+    }>(sql, {
       skEmpleado,
       fkVeo,
     });
     if (filas.length === 0) return null;
     const fila = filas[0];
     return {
+      idCarnet: fila.ID_CARNET,
       activo: Number(fila['ACTIVO'] ?? 0),
       frecuencia: fila['FRECUENCIA'] ? String(fila['FRECUENCIA']).trim() : null,
     };
@@ -94,6 +119,39 @@ export class CarnetRepositoryOracle {
     await ejecutor.ejecutar(sql, { frecuencia, skEmpleado, fkVeo });
   }
 
+  async actualizarEstatusInstalacion(
+    skEmpleado: number,
+    fkVeo: number,
+    estatusInstalacion: EstatusInstalacion | null,
+    ejecutor: EjecutorOracle = this.oracle,
+  ): Promise<void> {
+    await this.asegurarEstatusInstalacionDisponible();
+    if (estatusInstalacion === null) {
+      await ejecutor.ejecutar(
+        `
+          DELETE FROM dwh_suka.dim_ci_carnet_estatus
+          WHERE fk_posicion = :skEmpleado AND fk_veo = :fkVeo
+        `,
+        { skEmpleado, fkVeo },
+      );
+      return;
+    }
+    const sql = `
+      MERGE INTO dwh_suka.dim_ci_carnet_estatus destino
+      USING (
+        SELECT :skEmpleado AS fk_posicion, :fkVeo AS fk_veo, :estatusInstalacion AS estatus_instalacion
+        FROM dual
+      ) origen
+      ON (destino.fk_posicion = origen.fk_posicion AND destino.fk_veo = origen.fk_veo)
+      WHEN MATCHED THEN
+        UPDATE SET destino.estatus_instalacion = origen.estatus_instalacion
+      WHEN NOT MATCHED THEN
+        INSERT (fk_posicion, fk_veo, estatus_instalacion)
+        VALUES (origen.fk_posicion, origen.fk_veo, origen.estatus_instalacion)
+    `;
+    await ejecutor.ejecutar(sql, { estatusInstalacion, skEmpleado, fkVeo });
+  }
+
   async eliminar(
     skEmpleado: number,
     fkVeo: number,
@@ -107,5 +165,34 @@ export class CarnetRepositoryOracle {
       { nombre: 'fkveo', valor: fkVeo, tipo: 'numero' },
       { nombre: 'tabla', valor: null, tipo: 'numero' },
     ]);
+    if (
+      (await this.esquemaEstatusInstalacion.estaDisponible()) &&
+      (await this.tieneEstatusInstalacion(skEmpleado, fkVeo, ejecutor))
+    ) {
+      await ejecutor.ejecutar(
+        `
+          DELETE FROM dwh_suka.dim_ci_carnet_estatus
+          WHERE fk_posicion = :skEmpleado AND fk_veo = :fkVeo
+        `,
+        { skEmpleado, fkVeo },
+      );
+    }
+  }
+
+  private async tieneEstatusInstalacion(
+    skEmpleado: number,
+    fkVeo: number,
+    ejecutor: EjecutorOracle,
+  ): Promise<boolean> {
+    const filas = await ejecutor.ejecutar(
+      `
+        SELECT 1
+        FROM dwh_suka.dim_ci_carnet_estatus
+        WHERE fk_posicion = :skEmpleado AND fk_veo = :fkVeo
+          AND ROWNUM = 1
+      `,
+      { skEmpleado, fkVeo },
+    );
+    return filas.length > 0;
   }
 }

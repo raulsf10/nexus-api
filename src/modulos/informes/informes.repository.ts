@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { CarnetEstatusInstalacionEsquemaService } from '../../base-datos/oracle/carnet-estatus-instalacion-esquema.service';
 import { OracleService } from '../../base-datos/oracle/oracle.service';
 import { InformeAsignadoEntidad, InformeEntidad } from './entidades/informe.entidad';
 
@@ -6,7 +7,10 @@ type FilaOracle = Record<string, unknown>;
 
 @Injectable()
 export class InformesRepository {
-  constructor(private readonly oracle: OracleService) {}
+  constructor(
+    private readonly oracle: OracleService,
+    private readonly esquemaEstatusInstalacion: CarnetEstatusInstalacionEsquemaService,
+  ) {}
 
   async buscar(filtro: string): Promise<InformeEntidad[]> {
     const sql = `
@@ -25,10 +29,21 @@ export class InformesRepository {
   }
 
   async obtenerListadoPorUsuario(skEmpleado: number): Promise<InformeAsignadoEntidad[]> {
+    const estatusDisponible = await this.esquemaEstatusInstalacion.estaDisponible();
+    const estatusInstalacion = estatusDisponible
+      ? 'cei.estatus_instalacion'
+      : 'CAST(NULL AS VARCHAR2(20)) AS estatus_instalacion';
+    const relacionEstatus = estatusDisponible
+      ? `
+        LEFT JOIN dwh_suka.dim_ci_carnet_estatus cei
+          ON cei.fk_posicion = fac.fk_posicion AND cei.fk_veo = fac.fk_veo
+      `
+      : '';
     const sql = `
-      SELECT fac.fk_veo, dim.dsnombrelargo, fac.activo, fac.frecuencia
+      SELECT fac.fk_veo, dim.dsnombrelargo, fac.activo, fac.frecuencia, ${estatusInstalacion}
       FROM dwh_suka.dim_veo_carnet fac
       INNER JOIN dwh_suka.dim_veo dim ON dim.sk_veo = fac.fk_veo
+      ${relacionEstatus}
       WHERE fac.fk_posicion = :skEmpleado
       ORDER BY dim.dsnombrelargo
     `;
@@ -38,6 +53,7 @@ export class InformesRepository {
       nombre: String(r['DSNOMBRELARGO'] ?? '').trim(),
       activo: Number(r['ACTIVO'] ?? 0),
       frecuencia: r['FRECUENCIA'] ? String(r['FRECUENCIA']).trim() : null,
+      estatusInstalacion: r['ESTATUS_INSTALACION'] ? String(r['ESTATUS_INSTALACION']).trim() : null,
     }));
   }
 
