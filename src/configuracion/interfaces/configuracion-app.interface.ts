@@ -1,4 +1,5 @@
 export interface ConfiguracionAppSeccion {
+  host: string;
   puerto: number;
   ambiente: 'desarrollo' | 'pruebas' | 'produccion';
   nombre: string;

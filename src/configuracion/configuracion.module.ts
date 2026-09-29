@@ -4,13 +4,17 @@ import { ConfiguracionService } from './configuracion.service';
 import { esquemaValidacionEnv } from './esquema-validacion';
 
 const ambiente = process.env.APP_AMBIENTE ?? 'desarrollo';
+const archivosEnv =
+  ambiente === 'produccion'
+    ? ['.env.production', '.env.produccion']
+    : [`.env.${ambiente}`, '.env.development'];
 
 @Global()
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: [`.env.${ambiente}`, '.env.development'],
+      envFilePath: archivosEnv,
       validationSchema: esquemaValidacionEnv,
       validationOptions: {
         abortEarly: false,

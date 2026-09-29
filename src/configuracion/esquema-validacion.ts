@@ -2,6 +2,7 @@ import * as Joi from 'joi';
 import { separarLista } from './listas-configuracion';
 
 export const esquemaValidacionEnv = Joi.object({
+  APP_HOST: Joi.string().hostname().default('0.0.0.0'),
   APP_PUERTO: Joi.number().port().default(3000),
   APP_AMBIENTE: Joi.string().valid('desarrollo', 'pruebas', 'produccion').required(),
   APP_NOMBRE: Joi.string().required(),
@@ -46,7 +47,7 @@ export const esquemaValidacionEnv = Joi.object({
   SMTP_USUARIO: Joi.string().allow('').default(''),
   SMTP_PASSWORD: Joi.string().allow('').default(''),
   SMTP_REMITENTE: Joi.string().allow('').default(''),
-  ALERTA_DESTINATARIOS_DEFAULT: Joi.string().allow('').default('raul.fragoso@linusanalitica.mx'),
+  ALERTA_DESTINATARIOS_DEFAULT: Joi.string().allow('').default(''),
   NOTIFICACIONES_DESTINATARIO_FORZADO: Joi.string()
     .trim()
     .email({ tlds: { allow: false } })

@@ -17,6 +17,7 @@ export class ConfiguracionService {
 
   obtenerApp(): ConfiguracionAppSeccion {
     return {
+      host: this.leerTexto('APP_HOST'),
       puerto: this.leerNumero('APP_PUERTO'),
       ambiente: this.leerTexto('APP_AMBIENTE') as ConfiguracionAppSeccion['ambiente'],
       nombre: this.leerTexto('APP_NOMBRE'),

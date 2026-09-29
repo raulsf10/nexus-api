@@ -64,7 +64,7 @@ async function bootstrap(): Promise<void> {
 
   app.enableShutdownHooks();
 
-  await app.listen(cfgApp.puerto);
+  await app.listen(cfgApp.puerto, cfgApp.host);
   logger.info(`${cfgApp.nombre} escuchando en puerto ${cfgApp.puerto}`, {
     ambiente: cfgApp.ambiente,
     prefijo: cfgApp.prefijoApi,
