@@ -152,6 +152,18 @@ export class CarnetRepositoryOracle {
     await ejecutor.ejecutar(sql, { estatusInstalacion, skEmpleado, fkVeo });
   }
 
+  async obtenerEstatusInstalacion(
+    skEmpleado: number,
+    fkVeo: number,
+    ejecutor: EjecutorOracle = this.oracle,
+  ): Promise<string | null> {
+    const filas = await ejecutor.ejecutar<{ ESTATUS_INSTALACION: string }>(
+      'SELECT estatus_instalacion FROM dwh_suka.dim_ci_carnet_estatus WHERE fk_posicion=:skEmpleado AND fk_veo=:fkVeo',
+      { skEmpleado, fkVeo },
+    );
+    return filas[0]?.ESTATUS_INSTALACION?.trim() ?? null;
+  }
+
   async eliminar(
     skEmpleado: number,
     fkVeo: number,

@@ -8,6 +8,7 @@ export const esquemaValidacionEnv = Joi.object({
   APP_NOMBRE: Joi.string().required(),
   APP_PREFIJO_API: Joi.string().default('api'),
   CARGA_MASIVA_MAX_FILAS: Joi.number().integer().min(1).max(2000).default(2000),
+  SOLICITUDES_CIERRE_AUTOMATICO_ACTIVO: Joi.boolean().default(true),
 
   JWT_SECRETO: Joi.string().min(16).required(),
   JWT_EXPIRA_EN: Joi.string().default('8h'),

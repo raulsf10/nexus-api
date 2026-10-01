@@ -10,6 +10,9 @@ export interface FilaSolicitudCarnetEntidad {
   idPosicion: number;
   idInforme: number;
   frecuencia: string | null;
+  estatusInstalacion: string | null;
+  frecuenciaAprobada: string | null;
+  estatusAprobado: string | null;
   nombrePosicion: string | null;
   nombreInforme: string | null;
   estado: EstadoFilaSolicitudCarnet;
@@ -36,6 +39,9 @@ export interface SolicitudCarnetResumenEntidad {
   estado: EstadoSolicitudCarnet;
   fechaCreacion: string;
   fechaCierre: string | null;
+  fechaLimiteAceptacion?: string | null;
+  usuarioCierre?: string | null;
+  motivoCierre?: string | null;
   totalVersiones: number;
 }
 
@@ -62,6 +68,7 @@ export interface FilaSolicitudNueva {
   idPosicion: number;
   idInforme: number;
   frecuencia: string | null;
+  estatusInstalacion: string | null;
   nombrePosicion: string | null;
   nombreInforme: string | null;
 }

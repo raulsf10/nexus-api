@@ -87,6 +87,16 @@ export class ExcepcionesCarnetService {
     idInforme: number,
     idExcepcionExcluir?: number,
   ): Promise<void> {
+    if (
+      idPosicion !== null &&
+      (await this.repositorio.existeRegla(null, idInforme, idExcepcionExcluir))
+    ) {
+      throw new ExcepcionNegocio(
+        CodigosError.EXCEPCION_DUPLICADA,
+        'Este informe ya está bloqueado para todas las posiciones.',
+        409,
+      );
+    }
     if (await this.repositorio.existeRegla(idPosicion, idInforme, idExcepcionExcluir)) {
       const alcance =
         idPosicion === null ? 'para todas las posiciones' : `para la posición ${idPosicion}`;

@@ -28,6 +28,10 @@ export class FilaCargaDto {
   @Allow()
   frecuencia?: unknown;
 
+  @ApiPropertyOptional({ enum: ['EN INSTALACION', 'INSTALADO'] })
+  @Allow()
+  estatusInstalacion?: unknown;
+
   @Allow()
   estado?: unknown;
 

@@ -3,7 +3,12 @@ import { OperacionCarga } from '../enums/operacion-carga.enum';
 
 export type EstadoFila = 'valido' | 'error' | 'informativo';
 
-export type CampoFila = 'idPosicion' | 'idInforme' | 'frecuencia' | 'general';
+export type CampoFila =
+  | 'idPosicion'
+  | 'idInforme'
+  | 'frecuencia'
+  | 'estatusInstalacion'
+  | 'general';
 
 export interface ErrorFila {
   campo: CampoFila;
@@ -16,6 +21,7 @@ export interface FilaValidada {
   idPosicion: number | null;
   idInforme: number | null;
   frecuencia: string | null;
+  estatusInstalacion: string | null;
   estado: EstadoFila;
   errores: ErrorFila[];
   nombrePosicion: string | null;

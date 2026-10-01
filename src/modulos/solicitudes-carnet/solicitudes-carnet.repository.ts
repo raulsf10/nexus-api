@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { AjusteFilaSolicitudDto } from './dto/revisar-solicitud-carnet.dto';
 import { OperacionCarga } from '../carga-masiva/enums/operacion-carga.enum';
 import {
   EjecutorSqlServer,
@@ -38,6 +39,7 @@ export class SolicitudesCarnetRepository {
     archivos: DatosArchivosSolicitud,
     filas: FilaSolicitudNueva[],
   ): Promise<{ idSolicitud: number; idVersion: number }> {
+    await this.asegurarCamposRevision();
     return this.sqlServer.ejecutarEnTransaccion(async (ejecutar) => {
       const solicitudes = await ejecutar<{ idSolicitud: number }>(
         `
@@ -69,15 +71,18 @@ export class SolicitudesCarnetRepository {
     archivos: DatosArchivosSolicitud,
     filas: FilaSolicitudNueva[],
   ): Promise<{ idSolicitud: number; idVersion: number }> {
+    await this.asegurarCamposRevision();
     return this.sqlServer.ejecutarEnTransaccion(async (ejecutar) => {
       const solicitudes = await ejecutar<{ idSolicitud: number }>(
         `
         UPDATE ${TABLA_SOLICITUD}
-        SET estado = @estadoPendiente, fecha_cierre = NULL
+        SET estado = @estadoPendiente, fecha_cierre = NULL, fecha_limite_aceptacion = NULL,
+            usuario_cierre = NULL, motivo_cierre = NULL
         OUTPUT INSERTED.id_solicitud AS idSolicitud
         WHERE id_solicitud = @idSolicitud
           AND usuario_solicitante = @usuario
           AND estado = @estadoParcial
+          AND (fecha_limite_aceptacion IS NULL OR fecha_limite_aceptacion > SYSDATETIME())
       `,
         {
           idSolicitud,
@@ -159,6 +164,10 @@ export class SolicitudesCarnetRepository {
   }
 
   async obtenerDetalle(idSolicitud: number): Promise<SolicitudCarnetDetalleEntidad | null> {
+    const columnasRevision = await this.columnasRevision();
+    const columnasCierre = (await this.cierreDisponible())
+      ? 'CONVERT(varchar(33), fecha_limite_aceptacion, 126) AS fechaLimiteAceptacion, usuario_cierre AS usuarioCierre, motivo_cierre AS motivoCierre'
+      : 'NULL AS fechaLimiteAceptacion, NULL AS usuarioCierre, NULL AS motivoCierre';
     const solicitudes = await this.sqlServer.ejecutar<FilaSql>(
       `
       SELECT
@@ -168,6 +177,7 @@ export class SolicitudesCarnetRepository {
         estado,
         CONVERT(varchar(33), fecha_creacion, 126) AS fechaCreacion,
         CONVERT(varchar(33), fecha_cierre, 126) AS fechaCierre
+        , ${columnasCierre}
       FROM ${TABLA_SOLICITUD}
       WHERE id_solicitud = @idSolicitud
     `,
@@ -205,6 +215,7 @@ export class SolicitudesCarnetRepository {
         id_posicion AS idPosicion,
         id_informe AS idInforme,
         frecuencia,
+        ${columnasRevision},
         nombre_posicion AS nombrePosicion,
         nombre_informe AS nombreInforme,
         estado
@@ -231,6 +242,7 @@ export class SolicitudesCarnetRepository {
   }
 
   async obtenerVersionPendiente(idVersion: number): Promise<VersionPendienteRevision | null> {
+    const columnasRevision = await this.columnasRevision();
     const versiones = await this.sqlServer.ejecutar<FilaSql>(
       `
       SELECT
@@ -255,6 +267,7 @@ export class SolicitudesCarnetRepository {
         id_posicion AS idPosicion,
         id_informe AS idInforme,
         frecuencia,
+        ${columnasRevision},
         nombre_posicion AS nombrePosicion,
         nombre_informe AS nombreInforme,
         estado
@@ -281,7 +294,9 @@ export class SolicitudesCarnetRepository {
     filasAprobadas: number[],
     comentario: string | null,
     aplicarCambios: () => Promise<void>,
+    ajustes: AjusteFilaSolicitudDto[] = [],
   ): Promise<EstadoSolicitudCarnet> {
+    await this.asegurarCamposRevision();
     const estado =
       filasAprobadas.length === 0
         ? EstadoSolicitudCarnet.RECHAZADA
@@ -318,16 +333,20 @@ export class SolicitudesCarnetRepository {
       }
 
       const idsPendientes = new Set(filas.map((fila) => this.numero(fila, 'idFila')));
+      if (filasAprobadas.some((id) => !idsPendientes.has(id))) {
+        throw new ExcepcionNegocio(CodigosError.VALIDACION, 'La selección ya no es válida.', 409);
+      }
       const todosAprobados = filasAprobadas.length === idsPendientes.size;
       const estadoFinal = todosAprobados ? EstadoSolicitudCarnet.APROBADA : estado;
 
-      await aplicarCambios();
-
       for (const idFila of filasAprobadas) {
+        const ajuste = ajustes.find((fila) => fila.idFila === idFila);
         const actualizadas = await ejecutar<{ idFila: number }>(
           `
           UPDATE ${TABLA_FILA}
-          SET estado = @estadoAprobada
+          SET estado = @estadoAprobada,
+              frecuencia_aprobada = COALESCE(@frecuencia, frecuencia),
+              estatus_aprobado = COALESCE(@estatus, estatus_instalacion)
           OUTPUT INSERTED.id_fila AS idFila
           WHERE id_fila = @idFila
             AND fk_version = @idVersion
@@ -336,6 +355,8 @@ export class SolicitudesCarnetRepository {
           {
             idFila,
             idVersion,
+            frecuencia: ajuste?.frecuencia ?? null,
+            estatus: ajuste?.estatusInstalacion ?? null,
             estadoAprobada: EstadoFilaSolicitudCarnet.APROBADA,
             estadoPendiente: EstadoFilaSolicitudCarnet.PENDIENTE,
           },
@@ -392,11 +413,18 @@ export class SolicitudesCarnetRepository {
         `
         UPDATE ${TABLA_SOLICITUD}
         SET estado = @estado,
-            fecha_cierre = CASE WHEN @cerrar = 1 THEN SYSDATETIME() ELSE NULL END
+            fecha_cierre = CASE WHEN @cerrar = 1 THEN SYSDATETIME() ELSE NULL END,
+            fecha_limite_aceptacion = CASE WHEN @cerrar = 0 THEN
+              DATEADD(day, CASE (DATEDIFF(day, '19000101', SYSDATETIME()) % 7)
+                WHEN 0 THEN 3 WHEN 1 THEN 3 WHEN 2 THEN 5 WHEN 3 THEN 5
+                WHEN 4 THEN 5 WHEN 5 THEN 4 ELSE 3 END, SYSDATETIME()) ELSE NULL END,
+            usuario_cierre = CASE WHEN @cerrar = 1 THEN @usuarioRevisor ELSE NULL END,
+            motivo_cierre = CASE WHEN @cerrar = 1 THEN 'REVISION' ELSE NULL END
         WHERE id_solicitud = @idSolicitud
       `,
         {
           idSolicitud,
+          usuarioRevisor,
           estado: estadoFinal,
           cerrar:
             estadoFinal === EstadoSolicitudCarnet.APROBADA ||
@@ -405,6 +433,7 @@ export class SolicitudesCarnetRepository {
               : 0,
         },
       );
+      await aplicarCambios();
       return estadoFinal;
     });
   }
@@ -491,11 +520,11 @@ export class SolicitudesCarnetRepository {
       await ejecutar(
         `
         INSERT INTO ${TABLA_FILA} (
-          fk_version, numero_fila, id_posicion, id_informe, frecuencia,
+          fk_version, numero_fila, id_posicion, id_informe, frecuencia, estatus_instalacion,
           nombre_posicion, nombre_informe, estado
         )
         VALUES (
-          @idVersion, @numeroFila, @idPosicion, @idInforme, @frecuencia,
+          @idVersion, @numeroFila, @idPosicion, @idInforme, @frecuencia, @estatusInstalacion,
           @nombrePosicion, @nombreInforme, @estado
         )
       `,
@@ -505,6 +534,7 @@ export class SolicitudesCarnetRepository {
           idPosicion: fila.idPosicion,
           idInforme: fila.idInforme,
           frecuencia: fila.frecuencia,
+          estatusInstalacion: fila.estatusInstalacion,
           nombrePosicion: fila.nombrePosicion,
           nombreInforme: fila.nombreInforme,
           estado: EstadoFilaSolicitudCarnet.PENDIENTE,
@@ -521,6 +551,9 @@ export class SolicitudesCarnetRepository {
       estado: this.texto(fila, 'estado') as EstadoSolicitudCarnet,
       fechaCreacion: this.texto(fila, 'fechaCreacion') ?? '',
       fechaCierre: this.texto(fila, 'fechaCierre'),
+      fechaLimiteAceptacion: this.texto(fila, 'fechaLimiteAceptacion'),
+      usuarioCierre: this.texto(fila, 'usuarioCierre'),
+      motivoCierre: this.texto(fila, 'motivoCierre'),
       totalVersiones: this.numero(fila, 'totalVersiones'),
     };
   }
@@ -552,6 +585,9 @@ export class SolicitudesCarnetRepository {
       idPosicion: this.numero(fila, 'idPosicion'),
       idInforme: this.numero(fila, 'idInforme'),
       frecuencia: this.texto(fila, 'frecuencia'),
+      estatusInstalacion: this.texto(fila, 'estatusInstalacion'),
+      frecuenciaAprobada: this.texto(fila, 'frecuenciaAprobada'),
+      estatusAprobado: this.texto(fila, 'estatusAprobado'),
       nombrePosicion: this.texto(fila, 'nombrePosicion'),
       nombreInforme: this.texto(fila, 'nombreInforme'),
       estado: this.texto(fila, 'estado') as EstadoFilaSolicitudCarnet,
@@ -560,6 +596,71 @@ export class SolicitudesCarnetRepository {
 
   private numero(fila: FilaSql, columna: string): number {
     return Number(fila[columna] ?? 0);
+  }
+
+  private async camposRevisionDisponibles(): Promise<boolean> {
+    const filas = await this.sqlServer.ejecutar<{ disponibles: number }>(`
+      SELECT CASE WHEN COL_LENGTH('dbo.CI_SOLICITUD_CARNET_FILA', 'estatus_instalacion') IS NOT NULL
+        AND COL_LENGTH('dbo.CI_SOLICITUD_CARNET_FILA', 'frecuencia_aprobada') IS NOT NULL
+        AND COL_LENGTH('dbo.CI_SOLICITUD_CARNET_FILA', 'estatus_aprobado') IS NOT NULL
+        THEN 1 ELSE 0 END AS disponibles`);
+    return Number(filas[0]?.disponibles) === 1;
+  }
+
+  private async columnasRevision(): Promise<string> {
+    return (await this.camposRevisionDisponibles())
+      ? 'estatus_instalacion AS estatusInstalacion, frecuencia_aprobada AS frecuenciaAprobada, estatus_aprobado AS estatusAprobado'
+      : 'NULL AS estatusInstalacion, NULL AS frecuenciaAprobada, NULL AS estatusAprobado';
+  }
+
+  private async asegurarCamposRevision(): Promise<void> {
+    if (!(await this.camposRevisionDisponibles()) || !(await this.cierreDisponible())) {
+      throw new ExcepcionNegocio(
+        CodigosError.VALIDACION,
+        'No se puede guardar la solicitud. Contacta al administrador.',
+        409,
+      );
+    }
+  }
+
+  async cierreDisponible(): Promise<boolean> {
+    const filas = await this.sqlServer.ejecutar<{ disponible: number }>(`SELECT CASE WHEN
+      COL_LENGTH('dbo.CI_SOLICITUD_CARNET','fecha_limite_aceptacion') IS NOT NULL AND
+      COL_LENGTH('dbo.CI_SOLICITUD_CARNET','usuario_cierre') IS NOT NULL AND
+      COL_LENGTH('dbo.CI_SOLICITUD_CARNET','motivo_cierre') IS NOT NULL THEN 1 ELSE 0 END disponible`);
+    return Number(filas[0]?.disponible) === 1;
+  }
+
+  async aceptarParcial(idSolicitud: number, usuario: string): Promise<void> {
+    await this.asegurarCamposRevision();
+    const filas = await this.sqlServer.ejecutar(
+      `UPDATE ${TABLA_SOLICITUD}
+      SET estado=@aprobada, fecha_cierre=SYSDATETIME(), usuario_cierre=@usuario, motivo_cierre='SOLICITANTE'
+      OUTPUT INSERTED.id_solicitud
+      WHERE id_solicitud=@idSolicitud AND usuario_solicitante=@usuario AND estado=@parcial`,
+      {
+        idSolicitud,
+        usuario,
+        aprobada: EstadoSolicitudCarnet.APROBADA,
+        parcial: EstadoSolicitudCarnet.APROBADA_PARCIAL,
+      },
+    );
+    if (!filas.length)
+      throw new ExcepcionNegocio(
+        CodigosError.SOLICITUD_ESTADO_INVALIDO,
+        'La solicitud ya no está pendiente de aceptación.',
+        409,
+      );
+  }
+
+  async cerrarParcialesVencidas(): Promise<void> {
+    if (!(await this.cierreDisponible())) return;
+    await this.sqlServer.ejecutar(
+      `UPDATE ${TABLA_SOLICITUD}
+      SET estado=@aprobada, fecha_cierre=SYSDATETIME(), usuario_cierre='SISTEMA', motivo_cierre='SLA'
+      WHERE estado=@parcial AND fecha_limite_aceptacion <= SYSDATETIME()`,
+      { aprobada: EstadoSolicitudCarnet.APROBADA, parcial: EstadoSolicitudCarnet.APROBADA_PARCIAL },
+    );
   }
 
   private texto(fila: FilaSql, columna: string): string | null {

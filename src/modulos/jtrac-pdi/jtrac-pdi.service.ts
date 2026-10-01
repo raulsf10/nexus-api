@@ -79,9 +79,9 @@ export class JtracPdiService {
     return { exitoso: true };
   }
 
-  async eliminar(idRelacion: number) {
+  async eliminar(idRelacion: number, usuario: UsuarioJwtInterface) {
     await this.exigirTabla();
-    await this.repositorio.eliminar(idRelacion);
+    await this.repositorio.eliminar(idRelacion, usuario.usuario);
   }
 
   async reporte(dto: ConsultarReporteJtracDto, usuario: UsuarioJwtInterface) {

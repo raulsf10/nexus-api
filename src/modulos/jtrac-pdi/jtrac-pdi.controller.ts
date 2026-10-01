@@ -10,6 +10,8 @@ import {
   Post,
   Query,
   UseGuards,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RequiereModulo } from '../../comun/decoradores/requiere-modulo.decorator';
@@ -25,13 +27,66 @@ import {
 } from './dto/jtrac-pdi.dto';
 import { MODULO_GESTION_JTRAC_PDI } from './jtrac-pdi.constantes';
 import { JtracPdiService } from './jtrac-pdi.service';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { CargaIndicadoresService } from './carga-indicadores.service';
+import { JtracPdiHistorialRepository } from './jtrac-pdi-historial.repository';
+import { ConsultarHistorialIndicadoresDto } from './dto/consultar-historial-indicadores.dto';
+import { LoteIndicadoresDto } from './dto/carga-indicadores.dto';
+import { ValidarArchivoDto } from '../carga-masiva/dto/validar-archivo.dto';
+import { TAMANO_MAXIMO_ARCHIVO_BYTES } from '../carga-masiva/carga-masiva.constantes';
+import { ExcepcionNegocio } from '../../comun/excepciones/excepcion-negocio';
+import { CodigosError } from '../../comun/enums/codigos-error.enum';
 
 @ApiTags('Relaciones JTRAC–PDI')
 @ApiBearerAuth()
 @UseGuards(RequiereModuloGuard)
 @Controller('jtrac-pdi')
 export class JtracPdiController {
-  constructor(private readonly servicio: JtracPdiService) {}
+  constructor(
+    private readonly servicio: JtracPdiService,
+    private readonly carga: CargaIndicadoresService,
+    private readonly historial: JtracPdiHistorialRepository,
+  ) {}
+
+  @Get('historial')
+  @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
+  consultarHistorial(@Query() dto: ConsultarHistorialIndicadoresDto) {
+    return this.historial.consultar(dto);
+  }
+
+  @Post('carga-masiva/validar')
+  @HttpCode(200)
+  @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
+  @UseInterceptors(
+    FileInterceptor('archivo', { limits: { fileSize: TAMANO_MAXIMO_ARCHIVO_BYTES } }),
+  )
+  validarCarga(
+    @Body() dto: ValidarArchivoDto,
+    @UploadedFile() archivo?: { originalname: string; buffer: Buffer },
+  ) {
+    if (!archivo?.originalname.toLowerCase().endsWith('.xlsx')) {
+      throw new ExcepcionNegocio(
+        CodigosError.ARCHIVO_INVALIDO,
+        'Selecciona un archivo .xlsx.',
+        400,
+      );
+    }
+    return this.carga.validarArchivo(dto.operacion, archivo.buffer);
+  }
+
+  @Post('carga-masiva/revalidar')
+  @HttpCode(200)
+  @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
+  revalidarCarga(@Body() dto: LoteIndicadoresDto) {
+    return this.carga.validar(dto.operacion, dto.filas);
+  }
+
+  @Post('carga-masiva/procesar')
+  @HttpCode(200)
+  @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
+  procesarCarga(@Body() dto: LoteIndicadoresDto, @UsuarioActual() usuario: UsuarioJwtInterface) {
+    return this.carga.procesar(dto.operacion, dto.filas, usuario.usuario);
+  }
 
   @Get('estado')
   estado(@UsuarioActual() usuario: UsuarioJwtInterface) {
@@ -80,7 +135,10 @@ export class JtracPdiController {
   @Delete('relaciones/:idRelacion')
   @HttpCode(204)
   @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
-  eliminar(@Param('idRelacion', ParseIntPipe) idRelacion: number) {
-    return this.servicio.eliminar(idRelacion);
+  eliminar(
+    @Param('idRelacion', ParseIntPipe) idRelacion: number,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
+  ) {
+    return this.servicio.eliminar(idRelacion, usuario);
   }
 }

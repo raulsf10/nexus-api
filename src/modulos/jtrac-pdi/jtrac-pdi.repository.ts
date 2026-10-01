@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { JtracPdiHistorialRepository, MovimientoIndicador } from './jtrac-pdi-historial.repository';
 import { OracleService, EjecutorOracle } from '../../base-datos/oracle/oracle.service';
 import { CodigosError } from '../../comun/enums/codigos-error.enum';
 import { ExcepcionNegocio } from '../../comun/excepciones/excepcion-negocio';
@@ -13,7 +14,10 @@ type FilaOracle = Record<string, unknown>;
 
 @Injectable()
 export class JtracPdiRepository {
-  constructor(private readonly oracle: OracleService) {}
+  constructor(
+    private readonly oracle: OracleService,
+    private readonly historial: JtracPdiHistorialRepository,
+  ) {}
 
   async estadoEsquema() {
     const filas = await this.oracle.ejecutar<{ COLUMNAS: number; SECUENCIA: number }>(`
@@ -32,9 +36,9 @@ export class JtracPdiRepository {
     const filas = await this.oracle.ejecutar<{ FOLIO_JTRAC: string }>(
       `
       SELECT folio_jtrac FROM (
-        SELECT DISTINCT UPPER(TRIM(folio_jtrac)) AS folio_jtrac
+        SELECT DISTINCT UPPER(REGEXP_REPLACE(folio_jtrac,'^[[:space:]]+|[[:space:]]+$','')) AS folio_jtrac
         FROM dwh_suka.vw_base_fabrica_v2
-        WHERE TRIM(folio_jtrac) IS NOT NULL AND
+        WHERE REGEXP_REPLACE(folio_jtrac,'^[[:space:]]+|[[:space:]]+$','') IS NOT NULL AND
           (UPPER(folio_jtrac) LIKE :busqueda ESCAPE '\\'
            OR UPPER(nombre_entregable) LIKE :busqueda ESCAPE '\\')
         ORDER BY folio_jtrac
@@ -48,7 +52,7 @@ export class JtracPdiRepository {
     const filas = await this.oracle.ejecutar<{ INDICADOR: string | null }>(
       `
       SELECT DISTINCT TRIM(nombre_entregable) AS indicador FROM dwh_suka.vw_base_fabrica_v2
-      WHERE UPPER(TRIM(folio_jtrac))=:folioJtrac ORDER BY indicador`,
+      WHERE UPPER(REGEXP_REPLACE(folio_jtrac,'^[[:space:]]+|[[:space:]]+$',''))=:folioJtrac ORDER BY indicador`,
       { folioJtrac },
     );
     return {
@@ -97,7 +101,7 @@ export class JtracPdiRepository {
   }
 
   async crear(dto: GuardarRelacionJtracDto, usuario: string): Promise<number> {
-    return this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
+    const id = await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
       await this.verificarDuplicado(ejecutor, dto);
       const filas = await ejecutor.ejecutar<{ ID: number }>(
         'SELECT dwh_suka.seq_ci_jtrac_pdi.NEXTVAL AS id FROM dual',
@@ -111,6 +115,14 @@ export class JtracPdiRepository {
       );
       return idRelacion;
     });
+    await this.historial.registrar({
+      ...dto,
+      idRelacion: id,
+      usuario,
+      accion: 'ASIGNAR',
+      origen: 'Individual',
+    });
+    return id;
   }
 
   async actualizar(
@@ -118,6 +130,7 @@ export class JtracPdiRepository {
     dto: GuardarRelacionJtracDto,
     usuario: string,
   ): Promise<void> {
+    let movimiento: MovimientoIndicador | undefined;
     await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
       const actual = await this.bloquearRelacion(ejecutor, idRelacion);
       if (Number(actual.FK_VEO) === dto.idInforme && actual.FOLIO_JTRAC === dto.folioJtrac) return;
@@ -128,17 +141,96 @@ export class JtracPdiRepository {
           fecha_actualizacion=SYSDATE WHERE id_relacion=:idRelacion`,
         { idRelacion, folioJtrac: dto.folioJtrac, idInforme: dto.idInforme, usuario },
       );
+      movimiento = {
+        ...dto,
+        idRelacion,
+        usuario,
+        accion: 'ACTUALIZAR',
+        origen: 'Individual',
+        idInformeAnterior: Number(actual.FK_VEO),
+        folioAnterior: String(actual.FOLIO_JTRAC),
+      };
     });
+    if (movimiento) await this.historial.registrar(movimiento);
   }
 
-  async eliminar(idRelacion: number): Promise<void> {
+  async eliminar(idRelacion: number, usuario: string): Promise<void> {
+    let movimiento: MovimientoIndicador | undefined;
     await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
-      await this.bloquearRelacion(ejecutor, idRelacion);
+      const actual = await this.bloquearRelacion(ejecutor, idRelacion);
       await ejecutor.ejecutar(
         'DELETE FROM dwh_suka.dim_ci_jtrac_pdi WHERE id_relacion=:idRelacion',
         { idRelacion },
       );
+      movimiento = {
+        idRelacion,
+        usuario,
+        accion: 'ELIMINAR',
+        origen: 'Individual',
+        idInforme: Number(actual.FK_VEO),
+        folioJtrac: String(actual.FOLIO_JTRAC),
+      };
     });
+    if (movimiento) await this.historial.registrar(movimiento);
+  }
+
+  async encontrarRelacion(
+    dto: GuardarRelacionJtracDto,
+    ejecutor: EjecutorOracle = this.oracle,
+    bloquear = false,
+  ): Promise<number | null> {
+    const filas = await ejecutor.ejecutar<{ ID_RELACION: number }>(
+      `SELECT id_relacion FROM dwh_suka.dim_ci_jtrac_pdi
+        WHERE fk_veo=:idInforme AND UPPER(TRIM(folio_jtrac))=:folioJtrac ${bloquear ? 'FOR UPDATE' : ''}`,
+      { idInforme: dto.idInforme, folioJtrac: dto.folioJtrac },
+    );
+    return filas.length ? Number(filas[0].ID_RELACION) : null;
+  }
+
+  async aplicarLote(
+    filas: GuardarRelacionJtracDto[],
+    eliminar: boolean,
+    usuario: string,
+  ): Promise<void> {
+    const movimientos = await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
+      const cambios: MovimientoIndicador[] = [];
+      for (const fila of filas) {
+        let idRelacion = await this.encontrarRelacion(fila, ejecutor, true);
+        if ((eliminar && idRelacion === null) || (!eliminar && idRelacion !== null)) {
+          throw new ExcepcionNegocio(
+            CodigosError.VALIDACION,
+            'Las relaciones cambiaron. Vuelve a validar el archivo.',
+            409,
+          );
+        }
+        if (eliminar) {
+          await ejecutor.ejecutar(
+            'DELETE FROM dwh_suka.dim_ci_jtrac_pdi WHERE id_relacion=:idRelacion',
+            { idRelacion },
+          );
+        } else {
+          const secuencia = await ejecutor.ejecutar<{ ID: number }>(
+            'SELECT dwh_suka.seq_ci_jtrac_pdi.NEXTVAL id FROM dual',
+          );
+          idRelacion = Number(secuencia[0].ID);
+          await ejecutor.ejecutar(
+            `INSERT INTO dwh_suka.dim_ci_jtrac_pdi
+            (id_relacion,folio_jtrac,fk_veo,usuario_creacion,fecha_creacion)
+            VALUES (:idRelacion,:folioJtrac,:idInforme,:usuario,SYSDATE)`,
+            { ...fila, idRelacion, usuario },
+          );
+        }
+        cambios.push({
+          ...fila,
+          idRelacion: idRelacion!,
+          usuario,
+          accion: eliminar ? 'ELIMINAR' : 'ASIGNAR',
+          origen: 'Carga masiva',
+        });
+      }
+      return cambios;
+    });
+    for (const movimiento of movimientos) await this.historial.registrar(movimiento);
   }
 
   async reporte(dto: ConsultarReporteJtracDto) {
@@ -172,7 +264,8 @@ export class JtracPdiRepository {
         SELECT p.*, ROW_NUMBER() OVER (PARTITION BY idobj ORDER BY num_empleado,nombre_completo,denominacion_objeto,direccion,area) fila
         FROM dwh_suka.stg_rh_posisiones_activas p) WHERE fila=1) pa ON pa.idobj=vc.fk_posicion
       INNER JOIN dwh_suka.dim_ci_jtrac_pdi r ON r.fk_veo=vc.fk_veo
-      LEFT JOIN dwh_suka.vw_base_fabrica_v2 f ON UPPER(TRIM(f.folio_jtrac))=r.folio_jtrac
+      LEFT JOIN dwh_suka.vw_base_fabrica_v2 f
+        ON UPPER(REGEXP_REPLACE(f.folio_jtrac,'^[[:space:]]+|[[:space:]]+$',''))=r.folio_jtrac
       WHERE ${dto.idPosicion === undefined ? '1=1' : 'vc.fk_posicion=:idPosicion'}
         AND NOT EXISTS (SELECT 1 FROM dwh_suka.dim_ci_carnet_excepciones e
           WHERE e.fk_veo=vc.fk_veo AND (e.fk_posicion IS NULL OR e.fk_posicion=vc.fk_posicion))

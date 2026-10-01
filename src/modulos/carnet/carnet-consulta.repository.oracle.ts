@@ -17,12 +17,6 @@ function desdeCarnet(estatusDisponible: boolean): string {
     LEFT JOIN ${TABLA_INFORMES} v ON vc.fk_veo = v.sk_veo
     LEFT JOIN ${TABLA_POSICIONES} pa ON vc.fk_posicion = pa.idobj
     LEFT JOIN ${TABLA_CATEGORIAS} go ON vc.fk_veo = go.sk_veo
-    LEFT JOIN dwh_suka.dim_ci_jtrac_pdi jr ON jr.fk_veo = vc.fk_veo
-    LEFT JOIN (
-      SELECT DISTINCT UPPER(TRIM(folio_jtrac)) AS folio_jtrac,
-        TRIM(nombre_entregable) AS nombre_indicador
-      FROM dwh_suka.vw_base_fabrica_v2
-    ) ji ON ji.folio_jtrac = jr.folio_jtrac
     ${
       estatusDisponible
         ? 'LEFT JOIN dwh_suka.dim_ci_carnet_estatus cei ON cei.fk_posicion = vc.fk_posicion AND cei.fk_veo = vc.fk_veo'
@@ -43,10 +37,6 @@ const CONDICION_BUSQUEDA = `
     OR UPPER(v.dsnombrelargo) LIKE '%' || UPPER(:busqueda) || '%'
     OR UPPER(go.agrupador) LIKE '%' || UPPER(:busqueda) || '%'
     OR UPPER(vc.frecuencia) LIKE '%' || UPPER(:busqueda) || '%'
-    OR UPPER(jr.folio_jtrac) LIKE '%' || UPPER(:busqueda) || '%'
-    OR UPPER(ji.nombre_indicador) LIKE '%' || UPPER(:busqueda) || '%'
-    OR TO_CHAR(NVL(jr.fecha_actualizacion, jr.fecha_creacion), 'DD/MM/YYYY HH24:MI:SS') LIKE
-      '%' || :busqueda || '%'
     OR TO_CHAR(vc.fechaalta) LIKE '%' || :busqueda || '%'
     OR TO_CHAR(TO_DATE(TO_CHAR(vc.fechaalta), 'YYYYMMDD'), 'DD/MM/YYYY') LIKE
       '%' || :busqueda || '%'
@@ -114,15 +104,13 @@ export class CarnetConsultaRepositoryOracle {
           v.dsnombrelargo AS nombre_informe,
           go.agrupador AS categoria_pdi,
           vc.frecuencia AS frecuencia_uso,
-          jr.folio_jtrac,
-          ji.nombre_indicador,
-          TO_CHAR(NVL(jr.fecha_actualizacion, jr.fecha_creacion), 'YYYY-MM-DD"T"HH24:MI:SS')
-            AS fecha_asignacion_indicador,
+          CAST(NULL AS VARCHAR2(100)) AS folio_jtrac,
+          CAST(NULL AS VARCHAR2(4000)) AS nombre_indicador,
+          CAST(NULL AS VARCHAR2(19)) AS fecha_asignacion_indicador,
           ${columnaEstatus},
           vc.fechaalta AS fecha_asignacion,
           ROW_NUMBER() OVER (
-            ORDER BY vc.fechaalta ASC, vc.fk_veo ASC, vc.fk_posicion ASC, vc.sk_carnet ASC,
-              jr.id_relacion NULLS LAST, ji.nombre_indicador NULLS LAST
+            ORDER BY vc.fechaalta ASC, vc.fk_veo ASC, vc.fk_posicion ASC, vc.sk_carnet ASC
           ) AS rn
         ${desdeCarnet(estatusDisponible)}
         ${this.clausulaFiltros(busqueda, estatusDisponible, excepcionesDisponibles)}

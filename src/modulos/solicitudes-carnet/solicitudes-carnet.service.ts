@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { LoggerService } from '../../comun/logger/logger.service';
 import { extname } from 'path';
 import { CodigosError } from '../../comun/enums/codigos-error.enum';
 import { ExcepcionNegocio } from '../../comun/excepciones/excepcion-negocio';
@@ -40,6 +41,7 @@ export class SolicitudesCarnetService {
   constructor(
     private readonly repositorio: SolicitudesCarnetRepository,
     private readonly cargaMasiva: CargaMasivaService,
+    private readonly logger: LoggerService,
   ) {}
 
   async consultar(
@@ -107,7 +109,10 @@ export class SolicitudesCarnetService {
   ): Promise<{ idSolicitud: number; idVersion: number }> {
     this.verificarModulo(usuario, MODULO_SOLICITUDES_CARNET);
     const solicitud = await this.obtenerDetalle(idSolicitud, usuario);
-    if (solicitud.usuarioSolicitante !== usuario.usuario || solicitud.estado !== EstadoSolicitudCarnet.APROBADA_PARCIAL) {
+    if (
+      solicitud.usuarioSolicitante !== usuario.usuario ||
+      solicitud.estado !== EstadoSolicitudCarnet.APROBADA_PARCIAL
+    ) {
       throw new ExcepcionNegocio(
         CodigosError.SOLICITUD_ESTADO_INVALIDO,
         'Solo se puede cargar una nueva versión para una solicitud parcialmente aprobada propia.',
@@ -115,7 +120,11 @@ export class SolicitudesCarnetService {
       );
     }
     if (dto.operacion !== undefined && dto.operacion !== solicitud.operacion) {
-      throw new ExcepcionNegocio(CodigosError.VALIDACION, 'La nueva versión debe conservar el tipo de operación de la solicitud.', 400);
+      throw new ExcepcionNegocio(
+        CodigosError.VALIDACION,
+        'La nueva versión debe conservar el tipo de operación de la solicitud.',
+        400,
+      );
     }
     const filas = await this.validarArchivoSolicitud(archivoSolicitud, solicitud.operacion);
     return this.repositorio.crearNuevaVersion(
@@ -131,7 +140,7 @@ export class SolicitudesCarnetService {
     idVersion: number,
     dto: RevisarSolicitudCarnetDto,
     usuario: UsuarioJwtInterface,
-  ): Promise<{ estado: EstadoSolicitudCarnet }> {
+  ): Promise<{ estado: EstadoSolicitudCarnet; advertencia?: string }> {
     this.verificarModulo(usuario, MODULO_SEGUIMIENTO_SOLICITUDES_CARNET);
     const version = await this.repositorio.obtenerVersionPendiente(idVersion);
     if (!version) {
@@ -158,6 +167,17 @@ export class SolicitudesCarnetService {
       );
     }
     const comentario = dto.comentario?.trim() || null;
+    const ajustes = new Map((dto.ajustes ?? []).map((fila) => [fila.idFila, fila]));
+    if (
+      [...ajustes.keys()].some((id) => !dto.filasAprobadas.includes(id)) ||
+      (version.operacion === OperacionCarga.ELIMINACION && ajustes.size > 0)
+    ) {
+      throw new ExcepcionNegocio(
+        CodigosError.VALIDACION,
+        'Solo puedes editar filas que vas a asignar.',
+        400,
+      );
+    }
     if (dto.filasAprobadas.length === 0 && comentario === null) {
       throw new ExcepcionNegocio(
         CodigosError.VALIDACION,
@@ -166,6 +186,7 @@ export class SolicitudesCarnetService {
       );
     }
 
+    const tareasPosteriores: Array<() => Promise<void>> = [];
     const aplicarCambios = async (): Promise<void> => {
       if (dto.filasAprobadas.length === 0) return;
       const filasAprobadas = version.filas.filter((fila) =>
@@ -177,9 +198,13 @@ export class SolicitudesCarnetService {
           fila: fila.numeroFila,
           idPosicion: fila.idPosicion,
           idInforme: fila.idInforme,
-          frecuencia: fila.frecuencia,
+          frecuencia: ajustes.get(fila.idFila)?.frecuencia ?? fila.frecuencia,
+          estatusInstalacion:
+            ajustes.get(fila.idFila)?.estatusInstalacion ?? fila.estatusInstalacion,
         })),
         usuario.usuario,
+        tareasPosteriores,
+        true,
       );
       if (resultado.fallidas > 0) {
         const motivo =
@@ -196,8 +221,23 @@ export class SolicitudesCarnetService {
       dto.filasAprobadas,
       comentario,
       aplicarCambios,
+      dto.ajustes ?? [],
     );
-    return { estado };
+    let advertencia: string | undefined;
+    for (const tarea of tareasPosteriores) {
+      try {
+        await tarea();
+      } catch (error) {
+        advertencia =
+          'Movimientos aplicados. Hay avisos pendientes de confirmar; contacta al administrador.';
+        this.logger.advertencia('Solicitud aprobada con avisos pendientes de conciliación', {
+          idVersion,
+          idSolicitud: version.idSolicitud,
+          error: (error as Error).message,
+        });
+      }
+    }
+    return { estado, ...(advertencia ? { advertencia } : {}) };
   }
 
   async obtenerArchivo(
@@ -217,6 +257,12 @@ export class SolicitudesCarnetService {
     return archivo;
   }
 
+  async aceptarParcial(idSolicitud: number, usuario: UsuarioJwtInterface) {
+    this.verificarModulo(usuario, MODULO_SOLICITUDES_CARNET);
+    await this.repositorio.aceptarParcial(idSolicitud, usuario.usuario);
+    return { estado: EstadoSolicitudCarnet.APROBADA };
+  }
+
   private async validarArchivoSolicitud(
     archivo: ArchivoSubidoSolicitud,
     operacion: OperacionCarga,
@@ -228,10 +274,7 @@ export class SolicitudesCarnetService {
         400,
       );
     }
-    const resultado = await this.cargaMasiva.validarArchivo(
-      operacion,
-      archivo.buffer,
-    );
+    const resultado = await this.cargaMasiva.validarArchivo(operacion, archivo.buffer, false);
     if (resultado.filasConError > 0) {
       const primerError = resultado.filas.find((fila) => fila.estado === 'error');
       const mensaje = primerError?.errores[0]?.mensaje ?? 'La plantilla contiene filas inválidas.';
@@ -260,6 +303,7 @@ export class SolicitudesCarnetService {
       idPosicion: fila.idPosicion,
       idInforme: fila.idInforme,
       frecuencia: fila.frecuencia,
+      estatusInstalacion: fila.estatusInstalacion,
       nombrePosicion: fila.nombrePosicion,
       nombreInforme: fila.nombreInforme,
     };

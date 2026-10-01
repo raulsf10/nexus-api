@@ -1,4 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import {
+  EstatusInstalacion,
+  normalizarEstatusInstalacion,
+} from '../carnet/enums/estatus-instalacion.enum';
 import { EjecutorOracle, OracleService } from '../../base-datos/oracle/oracle.service';
 import { CodigosError } from '../../comun/enums/codigos-error.enum';
 import { ExcepcionNegocio } from '../../comun/excepciones/excepcion-negocio';
@@ -34,6 +38,7 @@ type AsignacionActual = { activo: number; frecuencia: string | null } | null;
 const CODIGOS_INFORMATIVOS: ReadonlySet<CodigoErrorFila> = new Set([
   CodigoErrorFila.CAMBIO_FRECUENCIA,
   CodigoErrorFila.REACTIVACION,
+  CodigoErrorFila.CAMBIO_ESTATUS,
 ]);
 
 interface ContextoValidacion {
@@ -47,6 +52,7 @@ interface FilaPreparada {
   idPosicion: number;
   idInforme: number;
   frecuencia: string | null;
+  estatusInstalacion: EstatusInstalacion | null;
 }
 
 // Qué debe replicarse en el espejo SQL Server tras el commit de Oracle.
@@ -59,6 +65,7 @@ interface PlanFila {
   activacionDiferida: boolean;
   frecuenciaActualizar: string | null;
   eliminar: boolean;
+  cambioEstatus?: boolean;
 }
 
 @Injectable()
@@ -81,7 +88,11 @@ export class CargaMasivaService {
     this.maxFilas = configuracion.obtenerApp().cargaMasivaMaxFilas;
   }
 
-  async validarArchivo(operacion: OperacionCarga, buffer: Buffer): Promise<ResultadoValidacion> {
+  async validarArchivo(
+    operacion: OperacionCarga,
+    buffer: Buffer,
+    validarRelacion = true,
+  ): Promise<ResultadoValidacion> {
     const crudas = await this.lectorExcel.leerFilas(buffer);
     if (crudas.length === 0) {
       throw new ExcepcionNegocio(
@@ -90,25 +101,43 @@ export class CargaMasivaService {
         400,
       );
     }
-    return this.validar(operacion, crudas);
+    return this.validar(operacion, crudas, validarRelacion, true);
   }
 
-  async revalidar(operacion: OperacionCarga, filas: FilaCargaDto[]): Promise<ResultadoValidacion> {
+  async revalidar(
+    operacion: OperacionCarga,
+    filas: FilaCargaDto[],
+    validarRelacion = true,
+    exigirDatosAsignacion = validarRelacion,
+  ): Promise<ResultadoValidacion> {
     const crudas: FilaCruda[] = filas.map((f, indice) => ({
       fila: typeof f.fila === 'number' ? f.fila : indice + 2,
       idPosicion: this.aTexto(f.idPosicion),
       idInforme: this.aTexto(f.idInforme),
       frecuencia: this.aTexto(f.frecuencia),
+      estatusInstalacion: this.aTexto(f.estatusInstalacion),
     }));
-    return this.validar(operacion, crudas);
+    return this.validar(operacion, crudas, validarRelacion, exigirDatosAsignacion);
   }
 
   async procesar(
     operacion: OperacionCarga,
     filas: FilaCargaDto[],
     usuario: string,
+    tareasPosteriores?: Array<() => Promise<void>>,
+    conservarCamposVacios = false,
   ): Promise<ResultadoProceso> {
     this.verificarLimite(filas.length);
+
+    const validacion = await this.revalidar(operacion, filas, false, !conservarCamposVacios);
+    if (validacion.filasConError) {
+      const fila = validacion.filas.find((item) => item.estado === 'error')!;
+      throw new ExcepcionNegocio(
+        CodigosError.VALIDACION,
+        `Fila ${fila.fila}: ${fila.errores[0].mensaje}`,
+        400,
+      );
+    }
 
     const preparadas: FilaPreparada[] = [];
     for (const f of filas) {
@@ -127,10 +156,14 @@ export class CargaMasivaService {
         idPosicion,
         idInforme,
         frecuencia: this.normalizarFrecuencia(this.aTexto(f.frecuencia)),
+        estatusInstalacion: normalizarEstatusInstalacion(f.estatusInstalacion),
       });
     }
 
     if (operacion === OperacionCarga.ASIGNACION) {
+      if (preparadas.some((fila) => fila.estatusInstalacion !== null)) {
+        await this.carnetOracle.asegurarEstatusInstalacionDisponible();
+      }
       await this.sla.asegurarDisponible(preparadas.map((fila) => fila.idInforme));
     }
     let planes: PlanFila[];
@@ -162,10 +195,17 @@ export class CargaMasivaService {
     // Oracle (fuente de verdad) confirmó. Espejo e historial son best-effort:
     // viven en otros servidores, no pueden ir en la transacción Oracle; sus
     // fallos se registran pero no revierten ni fallan la respuesta.
-    await this.replicarEnSqlServer(operacion, planes);
-    await this.registrarHistorialLote(operacion, planes, usuario);
-    await this.sla.confirmarAsignaciones(avisosPreparados);
-    await this.notificaciones.enviarCambios(cambios);
+    const despuesDeConfirmar = async (): Promise<void> => {
+      await this.replicarEnSqlServer(operacion, planes);
+      await this.registrarHistorialLote(operacion, planes, usuario);
+      for (const plan of planes) {
+        if (plan.eliminar) await this.sla.cancelarAsignacion(plan.idPosicion, plan.idInforme);
+      }
+      await this.sla.confirmarAsignaciones(avisosPreparados);
+      await this.notificaciones.enviarCambios(cambios);
+    };
+    if (tareasPosteriores) tareasPosteriores.push(despuesDeConfirmar);
+    else await despuesDeConfirmar();
 
     return {
       total: planes.length,
@@ -202,12 +242,27 @@ export class CargaMasivaService {
           });
           continue;
         }
-        await this.sla.cancelarAsignacion(f.idPosicion, f.idInforme);
         await this.carnetOracle.eliminar(f.idPosicion, f.idInforme, ejecutor);
         planes.push(this.planEliminacion(f));
         continue;
       }
-      planes.push(await this.aplicarAsignacionOracle(f, ejecutor));
+      const plan = await this.aplicarAsignacionOracle(f, ejecutor);
+      planes.push(plan);
+      if (f.estatusInstalacion !== null) {
+        const anterior = await this.carnetOracle.obtenerEstatusInstalacion(
+          f.idPosicion,
+          f.idInforme,
+          ejecutor,
+        );
+        await this.carnetOracle.actualizarEstatusInstalacion(
+          f.idPosicion,
+          f.idInforme,
+          f.estatusInstalacion,
+          ejecutor,
+        );
+        plan.cambioEstatus = anterior !== f.estatusInstalacion;
+        if (plan.cambioEstatus && !plan.insertar) plan.mensaje = 'Actualizado.';
+      }
     }
     return planes;
   }
@@ -327,6 +382,7 @@ export class CargaMasivaService {
       return AccionHistorial.ASIGNAR;
     if (plan.reactivar) return AccionHistorial.ACTIVAR;
     if (plan.frecuenciaActualizar !== null) return AccionHistorial.CAMBIO_FRECUENCIA;
+    if (plan.cambioEstatus) return AccionHistorial.CAMBIO_ESTATUS;
     return null;
   }
 
@@ -433,6 +489,8 @@ export class CargaMasivaService {
   private async validar(
     operacion: OperacionCarga,
     crudas: FilaCruda[],
+    validarRelacion = true,
+    exigirDatosAsignacion = false,
   ): Promise<ResultadoValidacion> {
     this.verificarLimite(crudas.length);
 
@@ -445,7 +503,9 @@ export class CargaMasivaService {
 
     const filas: FilaValidada[] = [];
     for (const c of crudas) {
-      filas.push(await this.validarFila(operacion, c, contexto));
+      filas.push(
+        await this.validarFila(operacion, c, contexto, validarRelacion, exigirDatosAsignacion),
+      );
     }
 
     const filasConError = filas.filter((f) => f.estado === 'error').length;
@@ -464,6 +524,8 @@ export class CargaMasivaService {
     operacion: OperacionCarga,
     c: FilaCruda,
     contexto: ContextoValidacion,
+    validarRelacion: boolean,
+    exigirDatosAsignacion: boolean,
   ): Promise<FilaValidada> {
     const errores: ErrorFila[] = [];
     let idPosicion: number | null = null;
@@ -506,6 +568,28 @@ export class CargaMasivaService {
     }
 
     const frecuenciaCanonica = this.normalizarFrecuencia(c.frecuencia);
+    const estatusCanonico = normalizarEstatusInstalacion(c.estatusInstalacion);
+    if (exigirDatosAsignacion && operacion === OperacionCarga.ASIGNACION) {
+      if (this.vacio(c.frecuencia))
+        errores.push({
+          campo: 'frecuencia',
+          codigo: CodigoErrorFila.CAMPO_REQUERIDO,
+          mensaje: 'Selecciona una frecuencia.',
+        });
+      if (this.vacio(c.estatusInstalacion))
+        errores.push({
+          campo: 'estatusInstalacion',
+          codigo: CodigoErrorFila.CAMPO_REQUERIDO,
+          mensaje: 'Selecciona un estatus de instalación.',
+        });
+    }
+    if (!this.vacio(c.estatusInstalacion) && estatusCanonico === null) {
+      errores.push({
+        campo: 'estatusInstalacion',
+        codigo: CodigoErrorFila.ESTATUS_INVALIDO,
+        mensaje: 'Selecciona EN INSTALACION o INSTALADO.',
+      });
+    }
     if (
       operacion === OperacionCarga.ASIGNACION &&
       !this.vacio(c.frecuencia) &&
@@ -561,6 +645,7 @@ export class CargaMasivaService {
 
     // El estado de asignación solo tiene sentido si posición e informe existen.
     if (
+      validarRelacion &&
       nombrePosicion !== null &&
       nombreInforme !== null &&
       idPosicion !== null &&
@@ -592,7 +677,14 @@ export class CargaMasivaService {
             mensaje: `Ya está asignado con frecuencia "${asignacion.frecuencia ?? 'sin definir'}"; al procesar se actualizará a "${frecuenciaCanonica}".`,
           });
         }
-        if (!reactivar && !cambiaFrecuencia) {
+        if (estatusCanonico !== null) {
+          errores.push({
+            campo: 'estatusInstalacion',
+            codigo: CodigoErrorFila.CAMBIO_ESTATUS,
+            mensaje: 'Se guardará el estatus indicado.',
+          });
+        }
+        if (!reactivar && !cambiaFrecuencia && estatusCanonico === null) {
           errores.push({
             campo: 'general',
             codigo: CodigoErrorFila.YA_ASIGNADO,
@@ -623,6 +715,7 @@ export class CargaMasivaService {
       idPosicion,
       idInforme,
       frecuencia: frecuenciaCanonica ?? c.frecuencia,
+      estatusInstalacion: estatusCanonico ?? c.estatusInstalacion,
       estado,
       errores,
       nombrePosicion,
@@ -702,13 +795,13 @@ export class CargaMasivaService {
       const texto = valor.trim();
       return texto.length > 0 ? texto : null;
     }
-    return null;
+    return '[valor inválido]';
   }
 
   private aEntero(texto: string | null): number | null {
     if (this.vacio(texto)) return null;
     const numero = Number(texto);
-    return Number.isInteger(numero) && numero > 0 ? numero : null;
+    return Number.isSafeInteger(numero) && numero > 0 ? numero : null;
   }
 
   private vacio(texto: string | null): boolean {

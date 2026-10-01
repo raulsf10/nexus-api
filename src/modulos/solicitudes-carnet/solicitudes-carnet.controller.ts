@@ -153,6 +153,16 @@ export class SolicitudesCarnetController {
     return this.servicio.revisar(idVersion, dto, usuario);
   }
 
+  @Patch(':idSolicitud/aceptacion')
+  @UseGuards(RequiereModuloGuard)
+  @RequiereModulo(MODULO_SOLICITUDES_CARNET)
+  aceptarParcial(
+    @Param('idSolicitud', ParseIntPipe) idSolicitud: number,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
+  ) {
+    return this.servicio.aceptarParcial(idSolicitud, usuario);
+  }
+
   private archivoRequerido(
     archivos: ArchivosSolicitudRecibidos,
     nombre: keyof ArchivosSolicitudRecibidos,
