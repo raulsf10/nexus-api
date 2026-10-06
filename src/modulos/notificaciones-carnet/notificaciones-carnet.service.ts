@@ -15,6 +15,8 @@ import { calcularVencimiento } from './plazo-aviso';
 import { separarCorreos } from '../../configuracion/listas-configuracion';
 import { SlaCarnetService } from './sla-carnet.service';
 import { ServiceUnavailableException } from '@nestjs/common';
+import { asuntoCarnet, htmlCarnet, textoCarnet } from './plantilla-carnet';
+import { DatosPlantillaCarnet } from './interfaces/datos-plantilla-carnet.interface';
 
 interface GrupoCambioCorreo {
   idPosicion: number;
@@ -22,6 +24,7 @@ interface GrupoCambioCorreo {
   usuario: string;
   origen: CambioCarnetCorreo['origen'];
   idInformes: number[];
+  cambiosFrecuencia?: Map<number, { anterior: string | null; nueva: string }>;
 }
 
 @Injectable()
@@ -126,7 +129,7 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     if (cambios.length === 0) return;
 
     const cfg = this.configuracion.obtenerCorreoNotificaciones();
-    if (cfg.escalonadosActivos) {
+    if (cfg.escalonadosActivos && cambios.some((cambio) => cambio.tipo === 'asignacion')) {
       try {
         if (!(await this.programadas.disponible()))
           throw new Error('Faltan las tablas de avisos escalonados.');
@@ -146,7 +149,7 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
         );
         return;
       }
-      cambios = cambios.filter((cambio) => cambio.tipo === 'eliminacion');
+      cambios = cambios.filter((cambio) => cambio.tipo !== 'asignacion');
       if (!cambios.length) return;
     }
     if (!this.transporte || !this.smtpVerificado) {
@@ -175,7 +178,7 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
           continue;
         }
 
-        await this.enviarGrupo(grupo, destinatarios);
+        if (!(await this.enviarGrupo(grupo, destinatarios))) continue;
         this.logger.info('Aviso de correo de CARNET enviado.', {
           idPosicion: grupo.idPosicion,
           tipo: grupo.tipo,
@@ -243,29 +246,49 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
       if (!informes.length) return false;
     }
     const previo = aviso?.estado === 'INICIAL' || aviso?.estado === 'INICIAL_SLA';
-    const nota = previo
-      ? `Aviso previo a los responsables. El usuario asignado aún no ha sido notificado. Su aviso se enviará después de ${
-          aviso.slaMinutos != null
-            ? `${aviso.slaMinutos} minuto(s) naturales`
-            : aviso.slaHoras == null
-              ? `${aviso.diasHabiles} día(s) hábil(es), excluyendo sábados y domingos`
-              : `${aviso.slaHoras} hora(s) naturales, incluyendo fines de semana`
-        }, contados desde este envío.${aviso.slaMinutos != null ? ' Los informes permanecen inactivos hasta confirmar el aviso final.' : ''}`
-      : '';
+    if (grupo.tipo === 'frecuencia') {
+      const visibles = [];
+      for (const informe of informes) {
+        if (!(await this.sla.estaPendiente(grupo.idPosicion, informe.idInforme)))
+          visibles.push(informe);
+      }
+      informes = visibles;
+      if (!informes.length) return false;
+    }
+    const [asignaciones, usuarioAsignado, correoAsignado] = await Promise.all([
+      grupo.tipo === 'eliminacion'
+        ? Promise.resolve([])
+        : this.informes.obtenerListadoPorUsuario(grupo.idPosicion),
+      this.repositorio.usuarioPorPosicion(grupo.idPosicion),
+      this.repositorio.obtenerCorreoPorPosicion(grupo.idPosicion),
+    ]);
+    const porInforme = new Map(asignaciones.map((asignacion) => [asignacion.fkVeo, asignacion]));
+    const datos: DatosPlantillaCarnet = {
+      tipo: previo ? 'aviso-inicial' : grupo.tipo,
+      idPosicion: grupo.idPosicion,
+      usuarioAsignado,
+      correoAsignado,
+      informes: informes.map((informe) => {
+        const asignacion = porInforme.get(informe.idInforme);
+        const frecuencia = grupo.cambiosFrecuencia?.get(informe.idInforme);
+        return {
+          idInforme: informe.idInforme,
+          nombre: informe.nombre ?? '',
+          frecuencia: frecuencia?.nueva ?? asignacion?.frecuencia ?? null,
+          frecuenciaAnterior: frecuencia?.anterior ?? null,
+          estatusInstalacion: asignacion?.estatusInstalacion ?? null,
+        };
+      }),
+    };
     const resultado = await this.transporte.sendMail({
       from: cfg.remitente,
       to: destinatarios.join(', '),
       ...(aviso
         ? { messageId: `<carnet.${aviso.idAviso}.${aviso.estado.toLowerCase()}@nexus.local>` }
         : {}),
-      subject: previo
-        ? `[NEXUS] Aviso previo de asignación (${informes.length}): posición ${grupo.idPosicion}`
-        : this.asunto(grupo, informes.length),
-      html: this.plantillaHtml(grupo, informes).replace(
-        '<h2 ',
-        `${nota ? `<p>${this.escaparHtml(nota)}</p>` : ''}<h2 `,
-      ),
-      text: [nota, this.plantillaTexto(grupo, informes)].filter(Boolean).join('\n\n'),
+      subject: asuntoCarnet(datos),
+      html: htmlCarnet(datos),
+      text: textoCarnet(datos),
     });
     if (resultado.rejected?.length) throw new Error('SMTP rechazó uno o más destinatarios.');
     return true;
@@ -393,6 +416,12 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
       const clave = `${cambio.idPosicion}:${cambio.tipo}`;
       const existente = grupos.get(clave);
       if (existente) {
+        if (cambio.tipo === 'frecuencia' && cambio.frecuenciaNueva) {
+          existente.cambiosFrecuencia?.set(cambio.idInforme, {
+            anterior: cambio.frecuenciaAnterior ?? null,
+            nueva: cambio.frecuenciaNueva,
+          });
+        }
         if (!existente.idInformes.includes(cambio.idInforme)) {
           existente.idInformes.push(cambio.idInforme);
         }
@@ -404,6 +433,16 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
         usuario: cambio.usuario,
         origen: cambio.origen,
         idInformes: [cambio.idInforme],
+        cambiosFrecuencia: new Map(
+          cambio.tipo === 'frecuencia' && cambio.frecuenciaNueva
+            ? [
+                [
+                  cambio.idInforme,
+                  { anterior: cambio.frecuenciaAnterior ?? null, nueva: cambio.frecuenciaNueva },
+                ],
+              ]
+            : [],
+        ),
       });
     }
     return [...grupos.values()];
@@ -443,58 +482,6 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
       });
     }
     return [...new Set(validos)];
-  }
-
-  private asunto(grupo: GrupoCambioCorreo, cantidad: number): string {
-    const accion = grupo.tipo === 'asignacion' ? 'Informes asignados' : 'Informes eliminados';
-    return `[NEXUS] CARNET - ${accion} (${cantidad}): posición ${grupo.idPosicion}`;
-  }
-
-  private plantillaHtml(
-    grupo: GrupoCambioCorreo,
-    informes: Array<{ idInforme: number; nombre: string | null }>,
-  ): string {
-    const accion = grupo.tipo === 'asignacion' ? 'asignaron' : 'eliminaron';
-    const color = grupo.tipo === 'asignacion' ? '#177245' : '#c0392b';
-    const filas = informes
-      .map(
-        ({ idInforme, nombre }) =>
-          `<li><strong>${idInforme}</strong>${nombre ? ` — ${this.escaparHtml(nombre)}` : ''}</li>`,
-      )
-      .join('');
-    return `
-      <div style="font-family:Arial,sans-serif;color:#24313f;max-width:680px;margin:auto;border:1px solid #dde3e8">
-        <div style="background:#00563f;color:#ffffff;padding:20px 24px;font-size:20px;font-weight:bold">SuKarne | NEXUS</div>
-        <div style="padding:24px">
-          <h2 style="margin:0 0 16px;color:${color}">Aviso de CARNET</h2>
-          <p>Se ${accion} <strong>${informes.length}</strong> informe(s) en la posición <strong>${grupo.idPosicion}</strong>.</p>
-          <p style="margin:0 0 8px"><strong>Origen:</strong> ${this.escaparHtml(grupo.origen)}</p>
-          <p style="margin:0 0 16px"><strong>Usuario:</strong> ${this.escaparHtml(grupo.usuario)}</p>
-          <p style="margin:0 0 8px"><strong>Informes involucrados</strong></p>
-          <ul style="padding-left:20px;margin-top:0">${filas}</ul>
-        </div>
-      </div>
-    `;
-  }
-
-  private plantillaTexto(
-    grupo: GrupoCambioCorreo,
-    informes: Array<{ idInforme: number; nombre: string | null }>,
-  ): string {
-    const accion = grupo.tipo === 'asignacion' ? 'asignaron' : 'eliminaron';
-    const lista = informes
-      .map(({ idInforme, nombre }) => `- ${idInforme}${nombre ? ` - ${nombre}` : ''}`)
-      .join('\n');
-    return [
-      'SuKarne | NEXUS',
-      '',
-      `Se ${accion} ${informes.length} informe(s) en la posición ${grupo.idPosicion}.`,
-      `Origen: ${grupo.origen}`,
-      `Usuario: ${grupo.usuario}`,
-      '',
-      'Informes:',
-      lista,
-    ].join('\n');
   }
 
   private async nombreInforme(

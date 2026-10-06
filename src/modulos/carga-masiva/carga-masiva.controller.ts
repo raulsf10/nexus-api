@@ -64,7 +64,16 @@ export class CargaMasivaController {
 
   @Get('plantilla')
   @ApiOperation({ summary: 'Descarga la plantilla del movimiento seleccionado.' })
-  async plantilla(@Query() dto: DescargarPlantillaCargaDto): Promise<StreamableFile> {
+  async plantilla(
+    @Query() dto: DescargarPlantillaCargaDto,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
+  ): Promise<StreamableFile> {
+    const permisos = dto.tipo === 'indicadores'
+      ? ['Carga Masiva Indicadores']
+      : ['Carga Masiva Carnet', 'Solicitudes Carnet', 'Seguimiento Solicitudes Carnet'];
+    if (!permisos.some((modulo) => usuario.modulos.includes(modulo))) {
+      throw new ExcepcionNegocio(CodigosError.NO_AUTORIZADO, 'No tienes acceso a esta plantilla.', 403);
+    }
     const contenido = await this.lectorExcel.crearPlantilla(dto.tipo, dto.operacion);
     return new StreamableFile(contenido, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -74,7 +83,7 @@ export class CargaMasivaController {
   }
 
   @Post('validar')
-  @RequiereModulo('Veo Carnet')
+  @RequiereModulo('Carga Masiva Carnet')
   @HttpCode(HttpStatus.OK)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Parsea y valida el Excel fila por fila sin persistir nada.' })
@@ -103,7 +112,7 @@ export class CargaMasivaController {
   }
 
   @Post('revalidar')
-  @RequiereModulo('Veo Carnet')
+  @RequiereModulo('Carga Masiva Carnet')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Re-valida filas corregidas manualmente en la vista previa.' })
   async revalidar(@Body() dto: LoteFilasDto): Promise<ResultadoValidacion> {
@@ -111,7 +120,7 @@ export class CargaMasivaController {
   }
 
   @Post('procesar')
-  @RequiereModulo('Veo Carnet')
+  @RequiereModulo('Carga Masiva Carnet')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ejecuta la carga (asignación o eliminación) de las filas válidas.' })
   async procesar(

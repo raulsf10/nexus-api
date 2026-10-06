@@ -45,8 +45,6 @@ export class LectorExcelService {
       celda.alignment = { vertical: 'middle' };
     });
     if (asignacionCarnet) {
-      hoja.getCell('C2').value = 'Mensual';
-      hoja.getCell('D2').value = 'EN INSTALACION';
       const listas = [FRECUENCIAS_VALIDAS.join(','), 'EN INSTALACION,INSTALADO'];
       for (let fila = 2; fila <= 2001; fila++) {
         listas.forEach((lista, indice) => {
@@ -104,7 +102,12 @@ export class LectorExcelService {
         indices.estatusInstalacion === null
           ? null
           : this.valorCelda(fila.getCell(indices.estatusInstalacion).value);
-      if (idPosicion === null && idInforme === null) {
+      if (
+        idPosicion === null &&
+        idInforme === null &&
+        frecuencia === null &&
+        estatusInstalacion === null
+      ) {
         continue;
       }
       filas.push({ fila: numero, idPosicion, idInforme, frecuencia, estatusInstalacion });

@@ -135,12 +135,15 @@ export class CargaIndicadoresService {
 
   async procesar(operacion: OperacionCarga, entradas: FilaIndicadorDto[], usuario: string) {
     const resultado = await this.validar(operacion, entradas);
-    const primera = resultado.filas.find((fila) => fila.estado === 'error');
-    if (primera)
+    const errores = resultado.filas
+      .filter((fila) => fila.estado === 'error')
+      .map((fila) => `Fila ${fila.fila}: ${fila.errores.map((error) => error.mensaje).join(' ')}`);
+    if (errores.length)
       throw new ExcepcionNegocio(
         CodigosError.VALIDACION,
-        `Fila ${primera.fila}: ${primera.errores[0].mensaje}`,
+        'Revisa los datos de la plantilla.',
         400,
+        { errores },
       );
     const filas = resultado.filas.map((fila) => ({
       folioJtrac: fila.folioJtrac,

@@ -276,9 +276,17 @@ export class SolicitudesCarnetService {
     }
     const resultado = await this.cargaMasiva.validarArchivo(operacion, archivo.buffer, false);
     if (resultado.filasConError > 0) {
-      const primerError = resultado.filas.find((fila) => fila.estado === 'error');
-      const mensaje = primerError?.errores[0]?.mensaje ?? 'La plantilla contiene filas inválidas.';
-      throw new ExcepcionNegocio(CodigosError.ARCHIVO_INVALIDO, mensaje, 400);
+      const errores = resultado.filas
+        .filter((fila) => fila.estado === 'error')
+        .map(
+          (fila) => `Fila ${fila.fila}: ${fila.errores.map((error) => error.mensaje).join(' ')}`,
+        );
+      throw new ExcepcionNegocio(
+        CodigosError.ARCHIVO_INVALIDO,
+        'Revisa los datos de la plantilla.',
+        400,
+        { errores },
+      );
     }
     if (resultado.filas.length === 0) {
       throw new ExcepcionNegocio(

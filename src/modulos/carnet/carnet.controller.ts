@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, HttpCode, HttpStatus, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  HttpCode,
+  HttpStatus,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { RequiereModulo } from '../../comun/decoradores/requiere-modulo.decorator';
+import { RequiereModuloGuard } from '../autenticacion/guardias/requiere-modulo.guard';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UsuarioActual } from '../../comun/decoradores/usuario-actual.decorator';
 import { UsuarioJwtInterface } from '../../comun/interfaces/usuario-jwt.interface';
@@ -15,13 +26,17 @@ type RespuestaCarnet = { exitoso: true };
 
 @ApiTags('Carnet')
 @ApiBearerAuth()
+@UseGuards(RequiereModuloGuard)
+@RequiereModulo('Movimientos Carnet')
 @Controller('carnet')
 export class CarnetController {
   constructor(private readonly servicio: CarnetService) {}
 
   @Post('lote')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Asigna varios informes a una posición y envía un único aviso agrupado.' })
+  @ApiOperation({
+    summary: 'Asigna varios informes a una posición y envía un único aviso agrupado.',
+  })
   async agregarLote(
     @Body() dto: AgregarLoteCarnetDto,
     @UsuarioActual() usuario: UsuarioJwtInterface,
@@ -100,7 +115,9 @@ export class CarnetController {
 
   @Delete('lote')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Elimina varios informes de una posición y envía un único aviso agrupado.' })
+  @ApiOperation({
+    summary: 'Elimina varios informes de una posición y envía un único aviso agrupado.',
+  })
   async eliminarLote(
     @Body() dto: EliminarLoteCarnetDto,
     @UsuarioActual() usuario: UsuarioJwtInterface,

@@ -13,6 +13,12 @@ import {
 
 @Injectable()
 export class ConfiguracionService {
+  private slaGuardado?: { slaMinutos: number; destinatariosIniciales: string[] };
+
+  establecerSlaGuardado(valor?: { slaMinutos: number; destinatariosIniciales: string[] }): void {
+    this.slaGuardado = valor;
+  }
+
   constructor(private readonly configService: ConfigService) {}
 
   obtenerApp(): ConfiguracionAppSeccion {
@@ -87,13 +93,15 @@ export class ConfiguracionService {
       usarCorreoPosicion: this.configService.get<boolean>('CARNET_USAR_CORREO_POSICION') ?? false,
       escalonadosActivos:
         this.configService.get<boolean>('CARNET_AVISOS_ESCALONADOS_ACTIVOS') ?? false,
-      slaMinutos: Number(
-        this.configService.get<number>('CARNET_SLA_MINUTOS') ??
-          Number(this.configService.get<number>('CARNET_SLA_HORAS') ?? 24) * 60,
-      ),
-      destinatariosIniciales: separarCorreos(
-        this.configService.get<string>('CARNET_SLA_DESTINATARIOS') ?? '',
-      ),
+      slaMinutos:
+        this.slaGuardado?.slaMinutos ??
+        Number(
+          this.configService.get<number>('CARNET_SLA_MINUTOS') ??
+            Number(this.configService.get<number>('CARNET_SLA_HORAS') ?? 24) * 60,
+        ),
+      destinatariosIniciales:
+        this.slaGuardado?.destinatariosIniciales ??
+        separarCorreos(this.configService.get<string>('CARNET_SLA_DESTINATARIOS') ?? ''),
       informesSla: [
         ...new Set(
           separarLista(this.configService.get<string>('CARNET_SLA_INFORMES') ?? '').map(Number),

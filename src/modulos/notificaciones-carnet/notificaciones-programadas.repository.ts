@@ -50,7 +50,7 @@ export class NotificacionesProgramadasRepository {
         { cambio: CambioCarnetCorreo; aplicaSla: boolean; informes: Map<number, string | null> }
       >();
       for (const cambio of cambios) {
-        if (cambio.tipo === 'eliminacion') {
+        if (cambio.tipo !== 'asignacion') {
           // Ya se canceló mientras la fila Oracle estaba bloqueada, antes del retiro.
           continue;
         }
@@ -68,10 +68,13 @@ export class NotificacionesProgramadasRepository {
       }
       for (const grupo of grupos.values()) {
         const idAviso = randomUUID();
+        // El SLA conserva UTC, independientemente del DEFAULT local de la tabla.
         await ejecutar(
           `INSERT INTO dbo.CI_CARNET_AVISO
-          (idAviso,idPosicion,correoInicial,diasHabiles,slaMinutos,zonaHoraria,usuario,origen,estado,fechaProgramada,ultimoError)
+          (idAviso,idPosicion,correoInicial,diasHabiles,slaMinutos,zonaHoraria,usuario,origen,estado,
+            fechaCreacion,proximoIntento,fechaProgramada,ultimoError)
           VALUES (@idAviso,@idPosicion,@correoInicial,0,@slaMinutos,@zonaHoraria,@usuario,@origen,@estado,
+            SYSUTCDATETIME(),SYSUTCDATETIME(),
             CASE WHEN @estado='USUARIO' THEN SYSUTCDATETIME() ELSE NULL END,
             CASE WHEN @estado='PREPARADO' THEN N'Pendiente de confirmar el alta Oracle. Si persiste, requiere conciliación.' ELSE NULL END)`,
           {

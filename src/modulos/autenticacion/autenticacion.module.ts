@@ -10,6 +10,8 @@ import { JwtEstrategia } from './estrategias/jwt.estrategia';
 import { JwtGuard } from './guardias/jwt.guard';
 import { RequiereModuloGuard } from './guardias/requiere-modulo.guard';
 import { LdapService } from './ldap.service';
+import { PermisosController } from './permisos.controller';
+import { PermisosService } from './permisos.service';
 
 @Module({
   imports: [
@@ -30,8 +32,9 @@ import { LdapService } from './ldap.service';
       },
     }),
   ],
-  controllers: [AutenticacionController],
+  controllers: [AutenticacionController, PermisosController],
   providers: [
+    PermisosService,
     AutenticacionService,
     AutenticacionRepository,
     LdapService,

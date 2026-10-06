@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfiguracionService } from '../../../configuracion/configuracion.service';
 import { UsuarioJwtInterface } from '../../../comun/interfaces/usuario-jwt.interface';
+import { AutenticacionRepository } from '../autenticacion.repository';
 
 interface PayloadJwt {
   usuario: string;
@@ -14,7 +15,10 @@ interface PayloadJwt {
 
 @Injectable()
 export class JwtEstrategia extends PassportStrategy(Strategy, 'jwt') {
-  constructor(configuracion: ConfiguracionService) {
+  constructor(
+    configuracion: ConfiguracionService,
+    private readonly repositorio: AutenticacionRepository,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -23,9 +27,12 @@ export class JwtEstrategia extends PassportStrategy(Strategy, 'jwt') {
   }
 
   async validate(payload: PayloadJwt): Promise<UsuarioJwtInterface> {
+    const modulos = await this.repositorio.obtenerModulosPorUsuario(payload.usuario);
+    if (!modulos.length)
+      throw new UnauthorizedException('El usuario ya no tiene permisos de acceso.');
     return {
       usuario: payload.usuario,
-      modulos: payload.modulos ?? [],
+      modulos,
       skEmpleado: payload.skEmpleado,
     };
   }

@@ -64,6 +64,7 @@ interface PlanFila {
   reactivar: boolean;
   activacionDiferida: boolean;
   frecuenciaActualizar: string | null;
+  frecuenciaAnterior?: string | null;
   eliminar: boolean;
   cambioEstatus?: boolean;
 }
@@ -131,11 +132,16 @@ export class CargaMasivaService {
 
     const validacion = await this.revalidar(operacion, filas, false, !conservarCamposVacios);
     if (validacion.filasConError) {
-      const fila = validacion.filas.find((item) => item.estado === 'error')!;
+      const errores = validacion.filas
+        .filter((fila) => fila.estado === 'error')
+        .map(
+          (fila) => `Fila ${fila.fila}: ${fila.errores.map((error) => error.mensaje).join(' ')}`,
+        );
       throw new ExcepcionNegocio(
         CodigosError.VALIDACION,
-        `Fila ${fila.fila}: ${fila.errores[0].mensaje}`,
+        'Revisa los datos de la plantilla.',
         400,
+        { errores },
       );
     }
 
@@ -339,6 +345,7 @@ export class CargaMasivaService {
       insertar: false,
       reactivar,
       activacionDiferida: reactivar && aplicaSla,
+      frecuenciaAnterior: asignacion.frecuencia,
       frecuenciaActualizar,
       eliminar: false,
     };
@@ -480,6 +487,16 @@ export class CargaMasivaService {
           tipo: 'asignacion',
           usuario,
           origen: 'Carga masiva',
+        });
+      } else if (plan.frecuenciaActualizar !== null) {
+        cambios.push({
+          idPosicion: plan.idPosicion,
+          idInforme: plan.idInforme,
+          tipo: 'frecuencia',
+          usuario,
+          origen: 'Carga masiva',
+          frecuenciaAnterior: plan.frecuenciaAnterior ?? null,
+          frecuenciaNueva: plan.frecuenciaActualizar,
         });
       }
     }

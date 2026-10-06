@@ -15,6 +15,7 @@ import {
 } from './interfaces/aviso-programado.interface';
 import { CambioCarnetCorreo } from './interfaces/cambio-carnet-correo.interface';
 import { NotificacionesProgramadasRepository } from './notificaciones-programadas.repository';
+import { ConfiguracionSlaService } from './configuracion-sla.service';
 
 @Injectable()
 export class SlaCarnetService {
@@ -26,6 +27,7 @@ export class SlaCarnetService {
     private readonly carnetSqlServer: CarnetRepositorySqlServer,
     private readonly historial: HistorialCarnetService,
     private readonly logger: LoggerService,
+    private readonly configuracionSla: ConfiguracionSlaService,
   ) {}
 
   aplica(idInforme: number): boolean {
@@ -35,6 +37,7 @@ export class SlaCarnetService {
 
   async asegurarDisponible(idInformes: number[]): Promise<void> {
     if (!idInformes.some((id) => this.aplica(id))) return;
+    await this.configuracionSla.actualizarEfectiva();
     if (!(await this.programadas.disponible())) {
       throw new ExcepcionNegocio(
         CodigosError.SQL_SERVER_ERROR,

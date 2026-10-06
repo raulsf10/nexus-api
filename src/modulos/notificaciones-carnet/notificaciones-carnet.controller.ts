@@ -4,6 +4,7 @@ import { RequiereModulo } from '../../comun/decoradores/requiere-modulo.decorato
 import { CodigosError } from '../../comun/enums/codigos-error.enum';
 import { ExcepcionNegocio } from '../../comun/excepciones/excepcion-negocio';
 import { ConfiguracionService } from '../../configuracion/configuracion.service';
+import { ConfiguracionSlaService } from './configuracion-sla.service';
 import { RequiereModuloGuard } from '../autenticacion/guardias/requiere-modulo.guard';
 import { ConsultarAvisosDto } from './dto/guardar-regla-correo.dto';
 import { NotificacionesProgramadasRepository } from './notificaciones-programadas.repository';
@@ -18,13 +19,14 @@ import {
 @ApiTags('Notificaciones de carnet')
 @ApiBearerAuth()
 @UseGuards(RequiereModuloGuard)
-@RequiereModulo('Seguimiento Solicitudes Carnet')
+@RequiereModulo('Notificaciones')
 @Controller('notificaciones-carnet')
 export class NotificacionesCarnetController {
   constructor(
     private readonly repositorio: NotificacionesProgramadasRepository,
     private readonly configuracion: ConfiguracionService,
     private readonly personalizados: CorreosPersonalizadosService,
+    private readonly configuracionSla: ConfiguracionSlaService,
   ) {}
 
   @Get('destinatarios')
@@ -55,7 +57,7 @@ export class NotificacionesCarnetController {
       activo: cfg.escalonadosActivos,
       usarCorreoPosicion: cfg.usarCorreoPosicion,
       zonaHoraria: cfg.zonaHoraria,
-      origenConfiguracion: 'entorno',
+      origenConfiguracion: this.configuracionSla.obtenerOrigen(),
       slaMinutos: cfg.slaMinutos,
       slaHoras: cfg.slaMinutos / 60,
       destinatarioForzado: cfg.destinatarioForzado,
@@ -68,12 +70,12 @@ export class NotificacionesCarnetController {
   @Put('reglas')
   @ApiOperation({
     deprecated: true,
-    summary: 'La configuración de SLA ahora se administra en el .env.',
+    summary: 'Usar PUT /configuracion-sla para destinatarios y plazo.',
   })
   guardar(): never {
     throw new ExcepcionNegocio(
       CodigosError.VALIDACION,
-      'Configura CARNET_SLA_INFORMES, CARNET_SLA_DESTINATARIOS y CARNET_SLA_MINUTOS en el .env del backend y reinícialo.',
+      'Configura destinatarios y plazo en Configuración SLA. Los IDs de informes se conservan en el .env.',
       409,
     );
   }

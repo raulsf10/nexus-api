@@ -25,7 +25,7 @@ import {
   ConsultarReporteJtracDto,
   GuardarRelacionJtracDto,
 } from './dto/jtrac-pdi.dto';
-import { MODULO_GESTION_JTRAC_PDI } from './jtrac-pdi.constantes';
+import { MODULO_GESTION_JTRAC_PDI, MODULO_REPORTE_JTRAC_PDI } from './jtrac-pdi.constantes';
 import { JtracPdiService } from './jtrac-pdi.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CargaIndicadoresService } from './carga-indicadores.service';
@@ -49,14 +49,14 @@ export class JtracPdiController {
   ) {}
 
   @Get('historial')
-  @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
+  @RequiereModulo('Historial Indicadores')
   consultarHistorial(@Query() dto: ConsultarHistorialIndicadoresDto) {
     return this.historial.consultar(dto);
   }
 
   @Post('carga-masiva/validar')
   @HttpCode(200)
-  @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
+  @RequiereModulo('Carga Masiva Indicadores')
   @UseInterceptors(
     FileInterceptor('archivo', { limits: { fileSize: TAMANO_MAXIMO_ARCHIVO_BYTES } }),
   )
@@ -76,14 +76,14 @@ export class JtracPdiController {
 
   @Post('carga-masiva/revalidar')
   @HttpCode(200)
-  @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
+  @RequiereModulo('Carga Masiva Indicadores')
   revalidarCarga(@Body() dto: LoteIndicadoresDto) {
     return this.carga.validar(dto.operacion, dto.filas);
   }
 
   @Post('carga-masiva/procesar')
   @HttpCode(200)
-  @RequiereModulo(MODULO_GESTION_JTRAC_PDI)
+  @RequiereModulo('Carga Masiva Indicadores')
   procesarCarga(@Body() dto: LoteIndicadoresDto, @UsuarioActual() usuario: UsuarioJwtInterface) {
     return this.carga.procesar(dto.operacion, dto.filas, usuario.usuario);
   }
@@ -94,6 +94,7 @@ export class JtracPdiController {
   }
 
   @Get('reporte')
+  @RequiereModulo(MODULO_REPORTE_JTRAC_PDI)
   reporte(@Query() dto: ConsultarReporteJtracDto, @UsuarioActual() usuario: UsuarioJwtInterface) {
     return this.servicio.reporte(dto, usuario);
   }

@@ -9,11 +9,14 @@ import { CarnetRepositoryOracle } from '../carnet/carnet.repository.oracle';
 import { CarnetRepositorySqlServer } from '../carnet/carnet.repository.sql-server';
 import { HistorialCarnetModule } from '../historial-carnet/historial-carnet.module';
 import { CorreosPersonalizadosService } from './correos-personalizados.service';
+import { ConfiguracionSlaService } from './configuracion-sla.service';
+import { ConfiguracionSlaController } from './configuracion-sla.controller';
 
 @Module({
   imports: [InformesModule, HistorialCarnetModule],
-  controllers: [NotificacionesCarnetController],
+  controllers: [NotificacionesCarnetController, ConfiguracionSlaController],
   providers: [
+    ConfiguracionSlaService,
     CorreosPersonalizadosService,
     NotificacionesCarnetService,
     NotificacionesCarnetRepositoryOracle,

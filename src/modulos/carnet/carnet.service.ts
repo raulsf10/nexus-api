@@ -175,7 +175,27 @@ export class CarnetService {
     frecuencia: string,
     usuario: string,
   ): Promise<void> {
-    await this.carnetOracle.actualizarFrecuencia(skEmpleado, fkVeo, frecuencia);
+    let frecuenciaAnterior: string | null = null;
+    let cambio = false;
+    await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
+      const asignacion = await this.carnetOracle.obtenerAsignacion(
+        skEmpleado,
+        fkVeo,
+        ejecutor,
+        true,
+      );
+      if (!asignacion)
+        throw new ExcepcionNegocio(
+          CodigosError.VALIDACION,
+          'El informe ya no está asignado a esta posición.',
+          404,
+        );
+      frecuenciaAnterior = asignacion.frecuencia;
+      if (frecuenciaAnterior?.trim().toLowerCase() === frecuencia.trim().toLowerCase()) return;
+      await this.carnetOracle.actualizarFrecuencia(skEmpleado, fkVeo, frecuencia, ejecutor);
+      cambio = true;
+    });
+    if (!cambio) return;
     await this.replicarEspejo('actualizarFrecuencia', { skEmpleado, fkVeo, frecuencia }, () =>
       this.carnetSqlServer.actualizarFrecuencia(skEmpleado, fkVeo, frecuencia),
     );
@@ -187,6 +207,17 @@ export class CarnetService {
       frecuencia,
       origen: OrigenHistorial.MANUAL,
     });
+    await this.notificaciones.enviarCambios([
+      {
+        idPosicion: skEmpleado,
+        idInforme: fkVeo,
+        tipo: 'frecuencia',
+        usuario,
+        origen: 'Manual',
+        frecuenciaAnterior,
+        frecuenciaNueva: frecuencia,
+      },
+    ]);
   }
 
   async eliminar(skEmpleado: number, fkVeo: number, usuario: string): Promise<void> {

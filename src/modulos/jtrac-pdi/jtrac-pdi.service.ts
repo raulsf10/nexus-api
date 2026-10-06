@@ -85,7 +85,13 @@ export class JtracPdiService {
   }
 
   async reporte(dto: ConsultarReporteJtracDto, usuario: UsuarioJwtInterface) {
-    this.validarConsulta(usuario);
+    if (!usuario.modulos.includes(MODULO_REPORTE_JTRAC_PDI)) {
+      throw new ExcepcionNegocio(
+        CodigosError.NO_AUTORIZADO,
+        'No tienes acceso a Carnet Indicadores.',
+        403,
+      );
+    }
     await this.exigirTabla();
     if (!(await this.excepciones.estaDisponible()))
       throw new ExcepcionNegocio(

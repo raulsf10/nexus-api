@@ -5,6 +5,15 @@ import { OracleService } from '../../base-datos/oracle/oracle.service';
 export class NotificacionesCarnetRepositoryOracle {
   constructor(private readonly oracle: OracleService) {}
 
+  async usuarioPorPosicion(idPosicion: number): Promise<string | null> {
+    const filas = await this.oracle.ejecutar<{ USUARIO: string | null }>(
+      `SELECT MIN(TRIM(sk_usuario_win)) AS usuario FROM dwh_suka.dim_hk_usuarios_windows
+       WHERE fk_empleado = :idPosicion`,
+      { idPosicion },
+    );
+    return filas[0]?.USUARIO ?? null;
+  }
+
   async destinatariosInforme(idInforme: number) {
     return this.oracle.ejecutar<{
       ID_POSICION: number;

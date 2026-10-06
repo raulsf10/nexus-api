@@ -1,4 +1,6 @@
-import { Controller, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
+import { RequiereModulo } from '../../comun/decoradores/requiere-modulo.decorator';
+import { RequiereModuloGuard } from '../autenticacion/guardias/requiere-modulo.guard';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InformeAsignadoEntidad, InformeEntidad } from './entidades/informe.entidad';
 import { InformesService } from './informes.service';
@@ -22,6 +24,8 @@ export class InformesController {
   }
 
   @Get('por-usuario/:skEmpleado')
+  @UseGuards(RequiereModuloGuard)
+  @RequiereModulo('Movimientos Carnet')
   @ApiOperation({ summary: 'Devuelve los informes asignados a una posición.' })
   obtenerPorUsuario(
     @Param('skEmpleado', ParseIntPipe) skEmpleado: number,
