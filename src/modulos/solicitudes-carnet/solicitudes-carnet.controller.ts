@@ -116,7 +116,9 @@ export class SolicitudesCarnetController {
   @UseGuards(RequiereModuloGuard)
   @RequiereModulo(MODULO_SOLICITUDES_CARNET)
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Carga una nueva versión después de una aprobación parcial.' })
+  @ApiOperation({
+    summary: 'Reenvía una solicitud rechazada o parcial con una nueva plantilla y VoBo.',
+  })
   @UseInterceptors(
     FileFieldsInterceptor(
       [
@@ -161,6 +163,17 @@ export class SolicitudesCarnetController {
     @UsuarioActual() usuario: UsuarioJwtInterface,
   ) {
     return this.servicio.aceptarParcial(idSolicitud, usuario);
+  }
+
+  @Patch(':idSolicitud/cierre')
+  @UseGuards(RequiereModuloGuard)
+  @RequiereModulo(MODULO_SEGUIMIENTO_SOLICITUDES_CARNET)
+  @ApiOperation({ summary: 'Cierra una solicitud revisada. Solo quien da seguimiento.' })
+  cerrar(
+    @Param('idSolicitud', ParseIntPipe) idSolicitud: number,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
+  ) {
+    return this.servicio.cerrar(idSolicitud, usuario);
   }
 
   private archivoRequerido(

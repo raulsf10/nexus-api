@@ -90,5 +90,6 @@ export interface VersionPendienteRevision {
   idVersion: number;
   usuarioSolicitante: string;
   estado: EstadoSolicitudCarnet;
+  estadoSolicitud: EstadoSolicitudCarnet;
   filas: FilaSolicitudCarnetEntidad[];
 }

@@ -70,33 +70,51 @@ export class SolicitudesCarnetRepository {
     comentario: string | null,
     archivos: DatosArchivosSolicitud,
     filas: FilaSolicitudNueva[],
-  ): Promise<{ idSolicitud: number; idVersion: number }> {
+  ): Promise<{ idSolicitud: number; idVersion: number; reapertura: boolean }> {
     await this.asegurarCamposRevision();
     return this.sqlServer.ejecutarEnTransaccion(async (ejecutar) => {
-      const solicitudes = await ejecutar<{ idSolicitud: number }>(
+      const solicitudes = await ejecutar<{ idSolicitud: number; estadoAnterior: string }>(
         `
         UPDATE ${TABLA_SOLICITUD}
         SET estado = @estadoPendiente, fecha_cierre = NULL, fecha_limite_aceptacion = NULL,
             usuario_cierre = NULL, motivo_cierre = NULL
-        OUTPUT INSERTED.id_solicitud AS idSolicitud
+        OUTPUT INSERTED.id_solicitud AS idSolicitud, DELETED.estado AS estadoAnterior
         WHERE id_solicitud = @idSolicitud
-          AND usuario_solicitante = @usuario
-          AND estado = @estadoParcial
-          AND (fecha_limite_aceptacion IS NULL OR fecha_limite_aceptacion > SYSDATETIME())
+          AND LOWER(usuario_solicitante) = LOWER(@usuario)
+          AND (estado = @estadoRechazada OR (estado = @estadoParcial
+            AND (fecha_limite_aceptacion IS NULL OR fecha_limite_aceptacion > SYSDATETIME())))
       `,
         {
           idSolicitud,
           usuario,
           estadoPendiente: EstadoSolicitudCarnet.PENDIENTE_REVISION,
           estadoParcial: EstadoSolicitudCarnet.APROBADA_PARCIAL,
+          estadoRechazada: EstadoSolicitudCarnet.RECHAZADA,
         },
       );
       if (solicitudes.length === 0) {
         throw new ExcepcionNegocio(
           CodigosError.SOLICITUD_ESTADO_INVALIDO,
-          'Solo se puede cargar una nueva versión para una solicitud parcialmente aprobada propia.',
+          'La solicitud ya no permite un nuevo envío.',
           409,
         );
+      }
+
+      const reapertura = solicitudes[0].estadoAnterior === EstadoSolicitudCarnet.RECHAZADA;
+      if (reapertura) {
+        const anteriores = await ejecutar<FilaSql>(
+          `SELECT TOP (1) archivo_solicitud_contenido AS contenido FROM ${TABLA_VERSION}
+           WHERE fk_solicitud = @idSolicitud ORDER BY numero_version DESC`,
+          { idSolicitud },
+        );
+        const anterior = anteriores[0] ? this.binario(anteriores[0], 'contenido') : null;
+        if (anterior?.equals(archivos.archivoSolicitudContenido)) {
+          throw new ExcepcionNegocio(
+            CodigosError.ARCHIVO_INVALIDO,
+            'Adjunta una nueva plantilla; cargaste el mismo archivo de la versión rechazada.',
+            400,
+          );
+        }
       }
 
       const numeros = await ejecutar<{ numeroVersion: number }>(
@@ -116,7 +134,7 @@ export class SolicitudesCarnetRepository {
         archivos,
       );
       await this.insertarFilas(ejecutar, idVersion, filas);
-      return { idSolicitud, idVersion };
+      return { idSolicitud, idVersion, reapertura };
     });
   }
 
@@ -250,6 +268,7 @@ export class SolicitudesCarnetRepository {
         s.operacion,
         s.usuario_solicitante AS usuarioSolicitante,
         v.id_version AS idVersion,
+        s.estado AS estadoSolicitud,
         v.estado
       FROM ${TABLA_VERSION} v
       INNER JOIN ${TABLA_SOLICITUD} s ON s.id_solicitud = v.fk_solicitud
@@ -283,6 +302,7 @@ export class SolicitudesCarnetRepository {
       idVersion: this.numero(version, 'idVersion'),
       usuarioSolicitante: this.texto(version, 'usuarioSolicitante') ?? '',
       estado: this.texto(version, 'estado') as EstadoSolicitudCarnet,
+      estadoSolicitud: this.texto(version, 'estadoSolicitud') as EstadoSolicitudCarnet,
       filas: filas.map((fila) => this.mapearFila(fila)),
     };
   }
@@ -297,12 +317,25 @@ export class SolicitudesCarnetRepository {
     ajustes: AjusteFilaSolicitudDto[] = [],
   ): Promise<EstadoSolicitudCarnet> {
     await this.asegurarCamposRevision();
+    await this.asegurarEstadoCerrada();
     const estado =
       filasAprobadas.length === 0
         ? EstadoSolicitudCarnet.RECHAZADA
         : EstadoSolicitudCarnet.APROBADA_PARCIAL;
 
     return this.sqlServer.ejecutarEnTransaccion(async (ejecutar) => {
+      const solicitud = await ejecutar(
+        `SELECT id_solicitud FROM ${TABLA_SOLICITUD} WITH (UPDLOCK, HOLDLOCK)
+         WHERE id_solicitud = @idSolicitud AND estado = @pendiente`,
+        { idSolicitud, pendiente: EstadoSolicitudCarnet.PENDIENTE_REVISION },
+      );
+      if (!solicitud.length) {
+        throw new ExcepcionNegocio(
+          CodigosError.SOLICITUD_ESTADO_INVALIDO,
+          'La solicitud ya no está pendiente de revisión.',
+          409,
+        );
+      }
       const version = await ejecutar(
         `SELECT id_version FROM ${TABLA_VERSION} WITH (UPDLOCK, HOLDLOCK)
          WHERE id_version = @idVersion AND fk_solicitud = @idSolicitud AND estado = @estado`,
@@ -414,7 +447,7 @@ export class SolicitudesCarnetRepository {
         UPDATE ${TABLA_SOLICITUD}
         SET estado = @estado,
             fecha_cierre = CASE WHEN @cerrar = 1 THEN SYSDATETIME() ELSE NULL END,
-            fecha_limite_aceptacion = CASE WHEN @cerrar = 0 THEN
+            fecha_limite_aceptacion = CASE WHEN @parcial = 1 THEN
               DATEADD(day, CASE (DATEDIFF(day, '19000101', SYSDATETIME()) % 7)
                 WHEN 0 THEN 3 WHEN 1 THEN 3 WHEN 2 THEN 5 WHEN 3 THEN 5
                 WHEN 4 THEN 5 WHEN 5 THEN 4 ELSE 3 END, SYSDATETIME()) ELSE NULL END,
@@ -425,12 +458,9 @@ export class SolicitudesCarnetRepository {
         {
           idSolicitud,
           usuarioRevisor,
-          estado: estadoFinal,
-          cerrar:
-            estadoFinal === EstadoSolicitudCarnet.APROBADA ||
-            estadoFinal === EstadoSolicitudCarnet.RECHAZADA
-              ? 1
-              : 0,
+          estado: todosAprobados ? EstadoSolicitudCarnet.CERRADA : estadoFinal,
+          cerrar: todosAprobados ? 1 : 0,
+          parcial: estadoFinal === EstadoSolicitudCarnet.APROBADA_PARCIAL ? 1 : 0,
         },
       );
       await aplicarCambios();
@@ -635,9 +665,10 @@ export class SolicitudesCarnetRepository {
     await this.asegurarCamposRevision();
     const filas = await this.sqlServer.ejecutar(
       `UPDATE ${TABLA_SOLICITUD}
-      SET estado=@aprobada, fecha_cierre=SYSDATETIME(), usuario_cierre=@usuario, motivo_cierre='SOLICITANTE'
+      SET estado=@aprobada, fecha_cierre=SYSDATETIME(), usuario_cierre=@usuario, motivo_cierre='SOLICITANTE',
+          fecha_limite_aceptacion=NULL
       OUTPUT INSERTED.id_solicitud
-      WHERE id_solicitud=@idSolicitud AND usuario_solicitante=@usuario AND estado=@parcial`,
+      WHERE id_solicitud=@idSolicitud AND LOWER(usuario_solicitante)=LOWER(@usuario) AND estado=@parcial`,
       {
         idSolicitud,
         usuario,
@@ -657,10 +688,57 @@ export class SolicitudesCarnetRepository {
     if (!(await this.cierreDisponible())) return;
     await this.sqlServer.ejecutar(
       `UPDATE ${TABLA_SOLICITUD}
-      SET estado=@aprobada, fecha_cierre=SYSDATETIME(), usuario_cierre='SISTEMA', motivo_cierre='SLA'
+      SET estado=@aprobada, fecha_cierre=SYSDATETIME(), usuario_cierre='SISTEMA', motivo_cierre='SLA',
+          fecha_limite_aceptacion=NULL
       WHERE estado=@parcial AND fecha_limite_aceptacion <= SYSDATETIME()`,
       { aprobada: EstadoSolicitudCarnet.APROBADA, parcial: EstadoSolicitudCarnet.APROBADA_PARCIAL },
     );
+  }
+
+  async cerrar(idSolicitud: number, usuario: string): Promise<void> {
+    await this.asegurarCamposRevision();
+    await this.asegurarEstadoCerrada();
+    const filas = await this.sqlServer.ejecutar(
+      `UPDATE ${TABLA_SOLICITUD}
+       SET estado=@cerrada, fecha_cierre=SYSDATETIME(), usuario_cierre=@usuario, motivo_cierre='MANUAL'
+       OUTPUT INSERTED.id_solicitud
+       WHERE id_solicitud=@idSolicitud AND estado IN (@aprobada, @parcial, @rechazada)`,
+      {
+        idSolicitud,
+        usuario,
+        cerrada: EstadoSolicitudCarnet.CERRADA,
+        aprobada: EstadoSolicitudCarnet.APROBADA,
+        parcial: EstadoSolicitudCarnet.APROBADA_PARCIAL,
+        rechazada: EstadoSolicitudCarnet.RECHAZADA,
+      },
+    );
+    if (!filas.length)
+      throw new ExcepcionNegocio(
+        CodigosError.SOLICITUD_ESTADO_INVALIDO,
+        'Solo se puede cerrar una solicitud revisada que siga abierta.',
+        409,
+      );
+  }
+
+  private async estadoCerradaDisponible(): Promise<boolean> {
+    const filas = await this.sqlServer.ejecutar<{ disponible: number }>(
+      `SELECT CASE WHEN EXISTS (SELECT 1 FROM sys.check_constraints
+       WHERE parent_object_id = OBJECT_ID('dbo.CI_SOLICITUD_CARNET')
+         AND name = 'CK_CI_SOLICITUD_CARNET_ESTADO'
+         AND definition LIKE @estado) THEN 1 ELSE 0 END AS disponible`,
+      { estado: "%'CERRADA'%" },
+    );
+    return Number(filas[0]?.disponible) === 1;
+  }
+
+  private async asegurarEstadoCerrada(): Promise<void> {
+    if (!(await this.estadoCerradaDisponible())) {
+      throw new ExcepcionNegocio(
+        CodigosError.SOLICITUD_ESTADO_INVALIDO,
+        'No se pudo cerrar la solicitud. Contacta al administrador.',
+        409,
+      );
+    }
   }
 
   private texto(fila: FilaSql, columna: string): string | null {

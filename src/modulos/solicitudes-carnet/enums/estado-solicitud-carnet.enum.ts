@@ -3,6 +3,7 @@ export enum EstadoSolicitudCarnet {
   APROBADA = 'APROBADA',
   APROBADA_PARCIAL = 'APROBADA_PARCIAL',
   RECHAZADA = 'RECHAZADA',
+  CERRADA = 'CERRADA',
 }
 
 export enum EstadoFilaSolicitudCarnet {

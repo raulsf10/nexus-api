@@ -28,6 +28,7 @@ import {
   SolicitudCarnetDetalleEntidad,
 } from './entidades/solicitud-carnet.entidad';
 import { SolicitudesCarnetRepository } from './solicitudes-carnet.repository';
+import { NotificacionesSolicitudesService } from './notificaciones-solicitudes.service';
 
 export interface ArchivoSubidoSolicitud {
   buffer: Buffer;
@@ -42,6 +43,7 @@ export class SolicitudesCarnetService {
     private readonly repositorio: SolicitudesCarnetRepository,
     private readonly cargaMasiva: CargaMasivaService,
     private readonly logger: LoggerService,
+    private readonly notificaciones: NotificacionesSolicitudesService,
   ) {}
 
   async consultar(
@@ -87,17 +89,25 @@ export class SolicitudesCarnetService {
     archivoSolicitud: ArchivoSubidoSolicitud,
     vobo: ArchivoSubidoSolicitud,
     usuario: UsuarioJwtInterface,
-  ): Promise<{ idSolicitud: number; idVersion: number }> {
+  ): Promise<{ idSolicitud: number; idVersion: number; advertencia?: string }> {
     this.verificarModulo(usuario, MODULO_SOLICITUDES_CARNET);
     const operacion = dto.operacion ?? OperacionCarga.ASIGNACION;
     const filas = await this.validarArchivoSolicitud(archivoSolicitud, operacion);
-    return this.repositorio.crearSolicitud(
+    const resultado = await this.repositorio.crearSolicitud(
       usuario.usuario,
       operacion,
       dto.comentario?.trim() || null,
       this.prepararDatosArchivos(archivoSolicitud, vobo),
       filas,
     );
+    const advertencia = await this.notificaciones.notificar({
+      evento: 'creada',
+      idSolicitud: resultado.idSolicitud,
+      usuarioSolicitante: usuario.usuario,
+      operacion,
+      comentario: dto.comentario,
+    });
+    return { ...resultado, ...(advertencia ? { advertencia } : {}) };
   }
 
   async crearNuevaVersion(
@@ -106,16 +116,18 @@ export class SolicitudesCarnetService {
     archivoSolicitud: ArchivoSubidoSolicitud,
     vobo: ArchivoSubidoSolicitud,
     usuario: UsuarioJwtInterface,
-  ): Promise<{ idSolicitud: number; idVersion: number }> {
+  ): Promise<{ idSolicitud: number; idVersion: number; advertencia?: string }> {
     this.verificarModulo(usuario, MODULO_SOLICITUDES_CARNET);
     const solicitud = await this.obtenerDetalle(idSolicitud, usuario);
     if (
-      solicitud.usuarioSolicitante !== usuario.usuario ||
-      solicitud.estado !== EstadoSolicitudCarnet.APROBADA_PARCIAL
+      solicitud.usuarioSolicitante.toLowerCase() !== usuario.usuario.toLowerCase() ||
+      ![EstadoSolicitudCarnet.APROBADA_PARCIAL, EstadoSolicitudCarnet.RECHAZADA].includes(
+        solicitud.estado,
+      )
     ) {
       throw new ExcepcionNegocio(
         CodigosError.SOLICITUD_ESTADO_INVALIDO,
-        'Solo se puede cargar una nueva versión para una solicitud parcialmente aprobada propia.',
+        'Solo puedes reenviar una solicitud propia rechazada o parcialmente aprobada.',
         409,
       );
     }
@@ -127,13 +139,21 @@ export class SolicitudesCarnetService {
       );
     }
     const filas = await this.validarArchivoSolicitud(archivoSolicitud, solicitud.operacion);
-    return this.repositorio.crearNuevaVersion(
+    const resultado = await this.repositorio.crearNuevaVersion(
       idSolicitud,
       usuario.usuario,
       dto.comentario?.trim() || null,
       this.prepararDatosArchivos(archivoSolicitud, vobo),
       filas,
     );
+    const advertencia = await this.notificaciones.notificar({
+      evento: resultado.reapertura ? 'reabierta' : 'nueva-version',
+      idSolicitud,
+      usuarioSolicitante: solicitud.usuarioSolicitante,
+      operacion: solicitud.operacion,
+      comentario: dto.comentario,
+    });
+    return { idSolicitud, idVersion: resultado.idVersion, ...(advertencia ? { advertencia } : {}) };
   }
 
   async revisar(
@@ -150,7 +170,11 @@ export class SolicitudesCarnetService {
         404,
       );
     }
-    if (version.estado !== EstadoSolicitudCarnet.PENDIENTE_REVISION || version.filas.length === 0) {
+    if (
+      version.estadoSolicitud !== EstadoSolicitudCarnet.PENDIENTE_REVISION ||
+      version.estado !== EstadoSolicitudCarnet.PENDIENTE_REVISION ||
+      version.filas.length === 0
+    ) {
       throw new ExcepcionNegocio(
         CodigosError.SOLICITUD_ESTADO_INVALIDO,
         'La versión ya fue revisada o no tiene filas pendientes.',
@@ -237,6 +261,22 @@ export class SolicitudesCarnetService {
         });
       }
     }
+    const aviso = await this.notificaciones.notificar({
+      evento:
+        estado === EstadoSolicitudCarnet.RECHAZADA
+          ? 'rechazada'
+          : estado === EstadoSolicitudCarnet.APROBADA
+            ? 'aprobada'
+            : 'parcial',
+      idSolicitud: version.idSolicitud,
+      usuarioSolicitante: version.usuarioSolicitante,
+      operacion: version.operacion,
+      usuarioRevisor: usuario.usuario,
+      comentario,
+      aprobadas: dto.filasAprobadas.length,
+      noAprobadas: version.filas.length - dto.filasAprobadas.length,
+    });
+    advertencia = [advertencia, aviso].filter(Boolean).join(' ') || undefined;
     return { estado, ...(advertencia ? { advertencia } : {}) };
   }
 
@@ -261,6 +301,12 @@ export class SolicitudesCarnetService {
     this.verificarModulo(usuario, MODULO_SOLICITUDES_CARNET);
     await this.repositorio.aceptarParcial(idSolicitud, usuario.usuario);
     return { estado: EstadoSolicitudCarnet.APROBADA };
+  }
+
+  async cerrar(idSolicitud: number, usuario: UsuarioJwtInterface) {
+    this.verificarModulo(usuario, MODULO_SEGUIMIENTO_SOLICITUDES_CARNET);
+    await this.repositorio.cerrar(idSolicitud, usuario.usuario);
+    return { estado: EstadoSolicitudCarnet.CERRADA };
   }
 
   private async validarArchivoSolicitud(
@@ -356,7 +402,7 @@ export class SolicitudesCarnetService {
 
   private verificarAcceso(usuarioSolicitante: string, usuario: UsuarioJwtInterface): void {
     if (
-      usuario.usuario === usuarioSolicitante &&
+      usuario.usuario.toLowerCase() === usuarioSolicitante.toLowerCase() &&
       usuario.modulos.includes(MODULO_SOLICITUDES_CARNET)
     ) {
       return;

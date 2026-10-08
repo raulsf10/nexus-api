@@ -123,6 +123,38 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     );
   }
 
+  async enviarNotificacion(
+    destinatarios: string[],
+    asunto: string,
+    texto: string,
+    html: string,
+  ): Promise<void> {
+    this.exigirSmtpPersonalizado();
+    const cfg = this.configuracion.obtenerCorreoNotificaciones();
+    const correos = this.validarDestinatarios(
+      (cfg.destinatarioForzado ? [cfg.destinatarioForzado] : destinatarios).map((correo) =>
+        correo.trim().toLowerCase(),
+      ),
+    );
+    if (!correos.length) throw new Error('No hay destinatarios válidos.');
+    const resultado = await this.transporte!.sendMail({
+      from: cfg.remitente,
+      ...(cfg.destinatarioForzado ? { to: correos } : { bcc: correos }),
+      subject: asunto.replace(/[\r\n]+/g, ' '),
+      text: texto,
+      html,
+    });
+    const aceptados = (resultado.accepted ?? []) as Array<string | { address: string }>;
+    const direcciones = new Set(
+      aceptados.map((correo) =>
+        (typeof correo === 'string' ? correo : correo.address).toLowerCase(),
+      ),
+    );
+    if (correos.some((correo) => !direcciones.has(correo))) {
+      throw new Error('SMTP no aceptó a todos los destinatarios.');
+    }
+  }
+
   // Best-effort: una falla de correo no debe revertir una asignación o una
   // eliminación que Oracle ya confirmó.
   async enviarCambios(cambios: CambioCarnetCorreo[]): Promise<void> {

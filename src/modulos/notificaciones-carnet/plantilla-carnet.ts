@@ -3,6 +3,9 @@ import { DatosPlantillaCarnet } from './interfaces/datos-plantilla-carnet.interf
 const ENCABEZADO = 'SUKARNE | CENTRAL DE INFORMACIÓN';
 const MENSAJE_ASIGNACION =
   'Se te realizó la asignación de informe(s), la cual empezará a cobrarse nivel de uso la próxima semana, por lo cual debes estar pendiente de cumplir con la descarga del mismo para no tener afectaciones en tus indicadores. En caso de tener menos de 30 días en tu puesto, este se te cobrará después de un mes.';
+const PDIS_INFORMATIVOS = new Set([44322, 44257, 44516]);
+const MENSAJE_INFORMATIVO =
+  'Se te ha asignado un PDI informativo, por lo que no aplicará ningún cobro por nivel de uso ni afectación en tus indicadores';
 const MENSAJE_BAJA =
   'Se realizó la baja de informe(s) a tu usuario por solicitud de tu centralizador o dueño de proceso. Si tienes dudas, favor de contactar a tu centralizador o dueño de proceso correspondiente.';
 
@@ -80,7 +83,23 @@ export function textoCarnet(datos: DatosPlantillaCarnet): string {
 
 function obtenerSecciones(datos: DatosPlantillaCarnet): SeccionPlantilla[] {
   if (datos.tipo === 'frecuencia') return seccionesFrecuencia(datos);
+  if (datos.tipo === 'asignacion') {
+    return [false, true].flatMap((informativo) => {
+      const informes = datos.informes.filter(
+        (informe) => PDIS_INFORMATIVOS.has(informe.idInforme) === informativo,
+      );
+      return informes.length
+        ? seccionInformes(
+            { ...datos, informes },
+            informativo ? MENSAJE_INFORMATIVO : MENSAJE_ASIGNACION,
+          )
+        : [];
+    });
+  }
+  return seccionInformes(datos, datos.tipo === 'eliminacion' ? MENSAJE_BAJA : null);
+}
 
+function seccionInformes(datos: DatosPlantillaCarnet, mensaje: string | null): SeccionPlantilla[] {
   const usuario = datos.usuarioAsignado?.trim();
   const destinatario = usuario ? `su usuario ${usuario}` : `su posición ${datos.idPosicion}`;
   const baja = datos.tipo === 'eliminacion';
@@ -111,7 +130,7 @@ function obtenerSecciones(datos: DatosPlantillaCarnet): SeccionPlantilla[] {
           ? []
           : [valorDisponible(informe.frecuencia), valorDisponible(informe.estatusInstalacion)]),
       ]),
-      mensaje: inicial ? null : baja ? MENSAJE_BAJA : MENSAJE_ASIGNACION,
+      mensaje,
     },
   ];
 }
