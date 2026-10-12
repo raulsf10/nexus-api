@@ -5,6 +5,7 @@ import { CodigosError } from '../../comun/enums/codigos-error.enum';
 import { AutenticacionRepository } from './autenticacion.repository';
 import { GuardarPermisosDto } from './dto/guardar-permisos.dto';
 import { MODULO_ADMINISTRAR_PERMISOS, MODULOS_ADMINISTRABLES } from './permisos.constantes';
+import { ConsultarUsuariosPermisosDto } from './dto/consultar-usuarios-permisos.dto';
 
 @Injectable()
 export class PermisosService {
@@ -12,6 +13,50 @@ export class PermisosService {
     private readonly oracle: OracleService,
     private readonly autenticacion: AutenticacionRepository,
   ) {}
+
+  async listarUsuarios(dto: ConsultarUsuariosPermisosDto) {
+    const parametros: Record<string, unknown> = {};
+    const modulos = MODULOS_ADMINISTRABLES.map(({ clave }, indice) => {
+      parametros[`modulo${indice}`] = clave;
+      return `:modulo${indice}`;
+    }).join(', ');
+    const filtro = `TRIM(usuario) IS NOT NULL AND modulo IN (${modulos})`;
+    const conteo = await this.oracle.ejecutar<{ TOTAL: number }>(
+      `SELECT COUNT(DISTINCT LOWER(TRIM(usuario))) AS total
+       FROM dwh_suka.dim_ci_admin WHERE ${filtro}`,
+      parametros,
+    );
+    const total = Number(conteo[0]?.TOTAL ?? 0);
+    const tamanioPagina = dto.tamanioPagina ?? 25;
+    const pagina = Math.min(dto.pagina ?? 1, Math.max(1, Math.ceil(total / tamanioPagina)));
+    if (!total) return { registros: [], total, pagina, tamanioPagina };
+    const filas = await this.oracle.ejecutar<{
+      USUARIO: string;
+      TOTAL_MODULOS: number;
+      ULTIMO_ACCESO: string | null;
+    }>(
+      `SELECT usuario, total_modulos, ultimo_acceso FROM (
+         SELECT LOWER(TRIM(usuario)) AS usuario,
+                COUNT(DISTINCT modulo) AS total_modulos,
+                TO_CHAR(MAX(ultimo_acceso), 'YYYY-MM-DD"T"HH24:MI:SS') AS ultimo_acceso,
+                ROW_NUMBER() OVER (ORDER BY LOWER(TRIM(usuario))) AS rn
+         FROM dwh_suka.dim_ci_admin
+         WHERE ${filtro}
+         GROUP BY LOWER(TRIM(usuario))
+       ) WHERE rn > :desde AND rn <= :hasta ORDER BY rn`,
+      { ...parametros, desde: (pagina - 1) * tamanioPagina, hasta: pagina * tamanioPagina },
+    );
+    return {
+      registros: filas.map((fila) => ({
+        usuario: fila.USUARIO,
+        totalModulos: Number(fila.TOTAL_MODULOS),
+        ultimoAcceso: fila.ULTIMO_ACCESO,
+      })),
+      total,
+      pagina,
+      tamanioPagina,
+    };
+  }
 
   async consultar(usuario: string) {
     const modulos = await this.autenticacion.obtenerModulosPorUsuario(usuario);
