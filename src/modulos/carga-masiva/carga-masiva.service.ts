@@ -26,6 +26,7 @@ import { OperacionCarga } from './enums/operacion-carga.enum';
 import { FilaCruda, LectorExcelService } from './lector-excel.service';
 import { ResultadoProceso } from './interfaces/resultado-proceso.interface';
 import { SlaCarnetService } from '../notificaciones-carnet/sla-carnet.service';
+import { ConfiguracionCorreoNotificacionesSeccion } from '../../configuracion/interfaces/configuracion-app.interface';
 import {
   ErrorFila,
   FilaValidada,
@@ -127,8 +128,10 @@ export class CargaMasivaService {
     usuario: string,
     tareasPosteriores?: Array<() => Promise<void>>,
     conservarCamposVacios = false,
+    idVersionSolicitud?: number,
   ): Promise<ResultadoProceso> {
     this.verificarLimite(filas.length);
+    if (idVersionSolicitud) await this.historial.asegurarVinculoSolicitud();
 
     const validacion = await this.revalidar(operacion, filas, false, !conservarCamposVacios);
     if (validacion.filasConError) {
@@ -170,16 +173,23 @@ export class CargaMasivaService {
       if (preparadas.some((fila) => fila.estatusInstalacion !== null)) {
         await this.carnetOracle.asegurarEstatusInstalacionDisponible();
       }
-      await this.sla.asegurarDisponible(preparadas.map((fila) => fila.idInforme));
     }
+    const configuracionSla = await this.sla.asegurarDisponible(
+      operacion === OperacionCarga.ASIGNACION ? preparadas.map((fila) => fila.idInforme) : [],
+    );
     let planes: PlanFila[];
     let cambios: CambioCarnetCorreo[] = [];
     let avisosPreparados: string[] = [];
     try {
       planes = await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
-        const resultado = await this.aplicarLoteOracle(operacion, preparadas, ejecutor);
+        const resultado = await this.aplicarLoteOracle(
+          operacion,
+          preparadas,
+          ejecutor,
+          configuracionSla,
+        );
         cambios = this.crearCambiosLote(resultado, usuario);
-        avisosPreparados = await this.sla.prepararAsignaciones(cambios, ejecutor);
+        avisosPreparados = await this.sla.prepararAsignaciones(cambios, ejecutor, configuracionSla);
         return resultado;
       });
     } catch (error) {
@@ -203,12 +213,12 @@ export class CargaMasivaService {
     // fallos se registran pero no revierten ni fallan la respuesta.
     const despuesDeConfirmar = async (): Promise<void> => {
       await this.replicarEnSqlServer(operacion, planes);
-      await this.registrarHistorialLote(operacion, planes, usuario);
+      await this.registrarHistorialLote(operacion, planes, usuario, idVersionSolicitud);
       for (const plan of planes) {
         if (plan.eliminar) await this.sla.cancelarAsignacion(plan.idPosicion, plan.idInforme);
       }
       await this.sla.confirmarAsignaciones(avisosPreparados);
-      await this.notificaciones.enviarCambios(cambios);
+      await this.notificaciones.enviarCambios(cambios, configuracionSla);
     };
     if (tareasPosteriores) tareasPosteriores.push(despuesDeConfirmar);
     else await despuesDeConfirmar();
@@ -230,6 +240,7 @@ export class CargaMasivaService {
     operacion: OperacionCarga,
     filas: FilaPreparada[],
     ejecutor: EjecutorOracle,
+    configuracionSla: ConfiguracionCorreoNotificacionesSeccion,
   ): Promise<PlanFila[]> {
     const planes: PlanFila[] = [];
     for (const f of filas) {
@@ -252,7 +263,7 @@ export class CargaMasivaService {
         planes.push(this.planEliminacion(f));
         continue;
       }
-      const plan = await this.aplicarAsignacionOracle(f, ejecutor);
+      const plan = await this.aplicarAsignacionOracle(f, ejecutor, configuracionSla);
       planes.push(plan);
       if (f.estatusInstalacion !== null) {
         const anterior = await this.carnetOracle.obtenerEstatusInstalacion(
@@ -276,6 +287,7 @@ export class CargaMasivaService {
   private async aplicarAsignacionOracle(
     f: FilaPreparada,
     ejecutor: EjecutorOracle,
+    configuracionSla: ConfiguracionCorreoNotificacionesSeccion,
   ): Promise<PlanFila> {
     const asignacion = await this.carnetOracle.obtenerAsignacion(
       f.idPosicion,
@@ -283,7 +295,7 @@ export class CargaMasivaService {
       ejecutor,
       true,
     );
-    const aplicaSla = this.sla.aplica(f.idInforme);
+    const aplicaSla = this.sla.aplica(f.idInforme, configuracionSla);
 
     if (asignacion === null) {
       await this.carnetOracle.agregar(f.idPosicion, f.idInforme, ejecutor);
@@ -358,6 +370,7 @@ export class CargaMasivaService {
     operacion: OperacionCarga,
     planes: PlanFila[],
     usuario: string,
+    idVersionSolicitud?: number,
   ): Promise<void> {
     const cachePosiciones = new Map<number, string | null>();
     const cacheInformes = new Map<number, string | null>();
@@ -376,7 +389,8 @@ export class CargaMasivaService {
           fkPosicion: plan.idPosicion,
           fkVeo: plan.idInforme,
           frecuencia: plan.frecuenciaActualizar,
-          origen: OrigenHistorial.CARGA_MASIVA,
+          origen: idVersionSolicitud ? OrigenHistorial.SOLICITUD : OrigenHistorial.CARGA_MASIVA,
+          idVersionSolicitud,
         },
         { posicion, informe },
       );

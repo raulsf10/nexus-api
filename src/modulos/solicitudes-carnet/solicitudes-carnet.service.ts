@@ -229,6 +229,7 @@ export class SolicitudesCarnetService {
         usuario.usuario,
         tareasPosteriores,
         true,
+        idVersion,
       );
       if (resultado.fallidas > 0) {
         const motivo =

@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { minutosHabilesEntre } from './minutos-habiles';
 import { SqlServerService } from '../../base-datos/sql-server/sql-server.service';
 import { AccionHistorial } from './enums/accion-historial.enum';
 import { OrigenHistorial } from './enums/origen-historial.enum';
@@ -20,17 +21,37 @@ const TABLA = 'DIM_CI_CARNET_HISTORIAL';
 
 @Injectable()
 export class HistorialCarnetRepository {
+  private vinculoDisponible = false;
   constructor(private readonly sqlServer: SqlServerService) {}
+
+  async admiteSolicitud(): Promise<boolean> {
+    if (this.vinculoDisponible) return true;
+    const filas = await this.sqlServer.ejecutar<{ disponible: number }>(
+      `SELECT CASE WHEN COL_LENGTH('dbo.DIM_CI_CARNET_HISTORIAL','fk_solicitud_version') IS NOT NULL
+        AND OBJECT_ID('dbo.CI_SOLICITUD_CARNET_VERSION','U') IS NOT NULL THEN 1 ELSE 0 END disponible`,
+    );
+    this.vinculoDisponible = filas[0]?.disponible === 1;
+    return this.vinculoDisponible;
+  }
+
+  async asegurarVinculoSolicitud(): Promise<void> {
+    if (!(await this.admiteSolicitud())) {
+      throw new ServiceUnavailableException(
+        'Falta actualizar el historial de solicitudes. Contacta al administrador.',
+      );
+    }
+  }
 
   // Los nombres llegan ya resueltos (snapshot); esta BD no conoce los catálogos.
   async registrar(datos: RegistroHistorial): Promise<void> {
+    if (datos.idVersionSolicitud) await this.asegurarVinculoSolicitud();
     const sql = `
       INSERT INTO ${TABLA}
         (usuario, accion, fk_posicion, fk_veo, nombre_posicion, nombre_informe,
-         frecuencia, origen, fecha)
+         frecuencia, origen, fecha${datos.idVersionSolicitud ? ', fk_solicitud_version' : ''})
       VALUES
         (@usuario, @accion, @fkPosicion, @fkVeo, @nombrePosicion, @nombreInforme,
-         @frecuencia, @origen, GETDATE())
+         @frecuencia, @origen, GETDATE()${datos.idVersionSolicitud ? ', @idVersionSolicitud' : ''})
     `;
     await this.sqlServer.ejecutar(sql, {
       usuario: datos.usuario,
@@ -41,6 +62,7 @@ export class HistorialCarnetRepository {
       nombreInforme: datos.nombreInforme,
       frecuencia: datos.frecuencia ?? null,
       origen: datos.origen,
+      ...(datos.idVersionSolicitud ? { idVersionSolicitud: datos.idVersionSolicitud } : {}),
     });
   }
 
@@ -59,17 +81,28 @@ export class HistorialCarnetRepository {
     const { where, parametros } = this.construirFiltros(filtros);
     const desde = (pagina - 1) * tamanioPagina;
     const hasta = desde + tamanioPagina;
+    const conSolicitud = await this.admiteSolicitud();
 
     const sql = `
-      SELECT * FROM (
+      SELECT t.*,
+        ${
+          conSolicitud
+            ? `v.fk_solicitud AS id_solicitud,
+          CONVERT(varchar(19), v.fecha_creacion, 126) AS fecha_solicitud,
+          CONVERT(varchar(19), v.fecha_revision, 126) AS fecha_atencion`
+            : 'NULL AS id_solicitud, NULL AS fecha_solicitud, NULL AS fecha_atencion'
+        }
+      FROM (
         SELECT
           id_historial, usuario, accion, fk_posicion, fk_veo,
           nombre_posicion, nombre_informe, frecuencia, origen,
+          ${conSolicitud ? 'fk_solicitud_version,' : ''}
           CONVERT(varchar(19), fecha, 126) AS fecha_txt,
           ROW_NUMBER() OVER (ORDER BY fecha DESC, id_historial DESC) AS rn
         FROM ${TABLA}
         ${where}
       ) t
+      ${conSolicitud ? 'LEFT JOIN dbo.CI_SOLICITUD_CARNET_VERSION v ON v.id_version=t.fk_solicitud_version' : ''}
       WHERE t.rn > @desde AND t.rn <= @hasta
       ORDER BY t.rn
     `;
@@ -119,7 +152,13 @@ export class HistorialCarnetRepository {
   }
 
   private mapear(r: FilaSql): HistorialCarnetEntidad {
+    const fechaSolicitud = r['fecha_solicitud'] ? String(r['fecha_solicitud']) : null;
+    const fechaAtencion = r['fecha_atencion'] ? String(r['fecha_atencion']) : null;
     return {
+      idSolicitud: r['id_solicitud'] ? Number(r['id_solicitud']) : null,
+      fechaSolicitud,
+      fechaAtencion,
+      slaMinutosHabiles: minutosHabilesEntre(fechaSolicitud, fechaAtencion),
       idHistorial: Number(r['id_historial']),
       usuario: String(r['usuario'] ?? '').trim(),
       accion: String(r['accion'] ?? '') as AccionHistorial,

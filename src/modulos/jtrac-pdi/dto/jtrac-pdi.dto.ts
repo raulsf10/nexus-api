@@ -1,5 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IntersectionType } from '@nestjs/swagger';
+import { FiltrosPlantillaDto } from '../../../comun/dto/filtros-plantilla.dto';
 
 export class ConsultarRelacionesJtracDto {
   @Type(() => Number)
@@ -21,7 +23,10 @@ export class ConsultarRelacionesJtracDto {
   busqueda?: string;
 }
 
-export class ConsultarReporteJtracDto extends ConsultarRelacionesJtracDto {
+export class ConsultarReporteJtracDto extends IntersectionType(
+  ConsultarRelacionesJtracDto,
+  FiltrosPlantillaDto,
+) {
   @IsOptional()
   @Type(() => Number)
   @IsInt()

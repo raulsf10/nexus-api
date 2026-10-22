@@ -12,10 +12,7 @@ export interface AvisoProgramadoCarnet {
   idAviso: string;
   idPosicion: number;
   correoInicial: string | null;
-  diasHabiles: number;
-  slaHoras: number | null;
   slaMinutos: number | null;
-  zonaHoraria: string;
   usuario: string;
   origen: 'Manual' | 'Carga masiva';
   estado:

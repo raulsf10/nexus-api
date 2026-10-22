@@ -157,10 +157,12 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
 
   // Best-effort: una falla de correo no debe revertir una asignación o una
   // eliminación que Oracle ya confirmó.
-  async enviarCambios(cambios: CambioCarnetCorreo[]): Promise<void> {
+  async enviarCambios(
+    cambios: CambioCarnetCorreo[],
+    cfg = this.configuracion.obtenerCorreoNotificaciones(),
+  ): Promise<void> {
     if (cambios.length === 0) return;
 
-    const cfg = this.configuracion.obtenerCorreoNotificaciones();
     if (cfg.escalonadosActivos && cambios.some((cambio) => cambio.tipo === 'asignacion')) {
       try {
         if (!(await this.programadas.disponible()))
@@ -333,7 +335,7 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     try {
       if (!(await this.programadas.disponible())) {
         this.logger.advertencia(
-          'Avisos escalonados pendientes de instalar: faltan tablas SQL Server.',
+          'Avisos escalonados pausados: falta actualizar la estructura de SQL Server.',
         );
         return;
       }
@@ -346,6 +348,9 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
             continue;
           }
           if (!this.transporte || !cfg.remitente.trim()) throw new Error('SMTP no disponible.');
+          if (aviso.estado === 'INICIAL' || aviso.estado === 'INICIAL_SLA') {
+            calcularVencimiento(new Date(), aviso);
+          }
           if (
             aviso.estado === 'USUARIO_SLA' &&
             (!aviso.fechaProgramada || new Date(aviso.fechaProgramada).getTime() > Date.now())

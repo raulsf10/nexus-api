@@ -86,10 +86,6 @@ export const esquemaValidacionEnv = Joi.object({
         informes.every((id) => /^\d+$/.test(id) && Number(id) > 0 && Number(id) <= 2147483647)
         ? valor
         : ayudas.error('any.invalid');
-    })
-    .when('CARNET_AVISOS_ESCALONADOS_ACTIVOS', {
-      is: true,
-      then: Joi.string().invalid('').required(),
     }),
   CARNET_AVISOS_INTERVALO_SEGUNDOS: Joi.number().integer().min(10).max(3600).default(60),
   CARNET_AVISOS_ZONA_HORARIA: Joi.string()

@@ -16,6 +16,7 @@ import {
 import { CambioCarnetCorreo } from './interfaces/cambio-carnet-correo.interface';
 import { NotificacionesProgramadasRepository } from './notificaciones-programadas.repository';
 import { ConfiguracionSlaService } from './configuracion-sla.service';
+import { ConfiguracionCorreoNotificacionesSeccion } from '../../configuracion/interfaces/configuracion-app.interface';
 
 @Injectable()
 export class SlaCarnetService {
@@ -30,22 +31,25 @@ export class SlaCarnetService {
     private readonly configuracionSla: ConfiguracionSlaService,
   ) {}
 
-  aplica(idInforme: number): boolean {
-    const cfg = this.configuracion.obtenerCorreoNotificaciones();
+  aplica(idInforme: number, cfg = this.configuracion.obtenerCorreoNotificaciones()): boolean {
     return cfg.escalonadosActivos && cfg.informesSla.includes(idInforme);
   }
 
-  async asegurarDisponible(idInformes: number[]): Promise<void> {
-    if (!idInformes.some((id) => this.aplica(id))) return;
-    await this.configuracionSla.actualizarEfectiva();
+  async asegurarDisponible(
+    idInformes: number[],
+  ): Promise<ConfiguracionCorreoNotificacionesSeccion> {
+    if (idInformes.length && this.configuracion.obtenerCorreoNotificaciones().escalonadosActivos) {
+      await this.configuracionSla.actualizarEfectiva();
+    }
+    const cfg = this.configuracion.obtenerCorreoNotificaciones();
+    if (!idInformes.some((id) => this.aplica(id, cfg))) return cfg;
     if (!(await this.programadas.disponible())) {
       throw new ExcepcionNegocio(
         CodigosError.SQL_SERVER_ERROR,
-        'No se asignaron informes: falta actualizar la cola SLA con db/notificaciones_escalonadas_carnet.sql.',
+        'No se asignaron informes: falta actualizar las tablas de avisos. Revisa db/simplificar_carnet_aviso.sql.',
         503,
       );
     }
-    const cfg = this.configuracion.obtenerCorreoNotificaciones();
     if (!cfg.host.trim() || !cfg.remitente.trim()) {
       throw new ExcepcionNegocio(
         CodigosError.VALIDACION,
@@ -53,13 +57,21 @@ export class SlaCarnetService {
         503,
       );
     }
+    if (!cfg.destinatariosIniciales.length) {
+      throw new ExcepcionNegocio(
+        CodigosError.VALIDACION,
+        'Configura los destinatarios iniciales del SLA.',
+        503,
+      );
+    }
+    return cfg;
   }
 
   async estaPendiente(idPosicion: number, idInforme: number): Promise<boolean> {
     // Desactivar el trabajador no autoriza saltarse pendientes que ya existían.
     if (
       !this.configuracion.obtenerCorreoNotificaciones().escalonadosActivos &&
-      !(await this.programadas.disponible())
+      !(await this.programadas.disponible(true))
     )
       return false;
     return this.programadas.tieneActivacionPendiente(idPosicion, idInforme);
@@ -78,9 +90,10 @@ export class SlaCarnetService {
   async prepararAsignaciones(
     cambios: CambioCarnetCorreo[],
     ejecutor: EjecutorOracle,
+    cfg: ConfiguracionCorreoNotificacionesSeccion,
   ): Promise<string[]> {
     const diferidos = cambios.filter(
-      (cambio) => cambio.tipo === 'asignacion' && this.aplica(cambio.idInforme),
+      (cambio) => cambio.tipo === 'asignacion' && this.aplica(cambio.idInforme, cfg),
     );
     if (!diferidos.length) return [];
     for (const cambio of diferidos) {
@@ -97,11 +110,7 @@ export class SlaCarnetService {
       cambio.activacionDiferida = true;
     }
     // SQL confirma la intención antes del commit Oracle, pero PREPARADO no puede enviar ni activar.
-    return this.programadas.registrar(
-      diferidos,
-      this.configuracion.obtenerCorreoNotificaciones(),
-      true,
-    );
+    return this.programadas.registrar(diferidos, cfg, true);
   }
 
   async confirmarAsignaciones(idAvisos: string[]): Promise<void> {
@@ -122,7 +131,7 @@ export class SlaCarnetService {
   }
 
   async cancelarAsignacion(idPosicion: number, idInforme: number): Promise<void> {
-    if (!(await this.programadas.disponible())) {
+    if (!(await this.programadas.disponible(true))) {
       if (this.configuracion.obtenerCorreoNotificaciones().escalonadosActivos) {
         throw new ExcepcionNegocio(
           CodigosError.SQL_SERVER_ERROR,

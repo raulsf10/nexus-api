@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { filtrosPlantilla } from '../../comun/utilidades/filtros-plantilla';
 import { JtracPdiHistorialRepository, MovimientoIndicador } from './jtrac-pdi-historial.repository';
 import { OracleService, EjecutorOracle } from '../../base-datos/oracle/oracle.service';
 import { CodigosError } from '../../comun/enums/codigos-error.enum';
@@ -234,6 +235,7 @@ export class JtracPdiRepository {
   }
 
   async reporte(dto: ConsultarReporteJtracDto) {
+    const plantilla = filtrosPlantilla(dto);
     const busqueda = dto.busqueda
       ? `AND (
       UPPER(pa.direccion) LIKE :busqueda ESCAPE '\\'
@@ -269,10 +271,12 @@ export class JtracPdiRepository {
       WHERE ${dto.idPosicion === undefined ? '1=1' : 'vc.fk_posicion=:idPosicion'}
         AND NOT EXISTS (SELECT 1 FROM dwh_suka.dim_ci_carnet_excepciones e
           WHERE e.fk_veo=vc.fk_veo AND (e.fk_posicion IS NULL OR e.fk_posicion=vc.fk_posicion))
-      ${busqueda}`;
+      ${busqueda}
+      ${plantilla.condiciones.map((condicion) => `AND ${condicion}`).join('\n')}`;
     const parametros = {
       ...(dto.idPosicion === undefined ? {} : { idPosicion: dto.idPosicion }),
       ...(dto.busqueda ? { busqueda: this.patron(dto.busqueda) } : {}),
+      ...plantilla.parametros,
     };
     const conteo = await this.oracle.ejecutar<{ TOTAL: number }>(
       `SELECT COUNT(*) total FROM (${consulta})`,

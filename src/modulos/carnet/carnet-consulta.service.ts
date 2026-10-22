@@ -13,9 +13,9 @@ export class CarnetConsultaService {
     const pagina = filtros.pagina ?? 1;
     const tamanioPagina = filtros.tamanioPagina ?? TAMANIO_PAGINA_POR_DEFECTO;
     const busqueda = filtros.busqueda?.trim() || undefined;
-    const total = await this.repositorio.contar(busqueda);
+    const total = await this.repositorio.contar(busqueda, filtros);
     const registros =
-      total === 0 ? [] : await this.repositorio.consultar(pagina, tamanioPagina, busqueda);
+      total === 0 ? [] : await this.repositorio.consultar(pagina, tamanioPagina, busqueda, filtros);
 
     return { total, pagina, tamanioPagina, registros };
   }

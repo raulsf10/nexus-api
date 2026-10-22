@@ -15,11 +15,15 @@ import { CambioCarnetCorreo } from './interfaces/cambio-carnet-correo.interface'
 export class NotificacionesProgramadasRepository {
   constructor(private readonly sql: SqlServerService) {}
 
-  async disponible(): Promise<boolean> {
-    const filas = await this.sql.ejecutar<{ disponible: number }>(`
+  async disponible(permitirColumnasAnteriores = false): Promise<boolean> {
+    const filas = await this.sql.ejecutar<{ disponible: number }>(
+      `
       SELECT CASE WHEN OBJECT_ID('dbo.CI_CARNET_AVISO','U') IS NOT NULL
         AND OBJECT_ID('dbo.CI_CARNET_AVISO_INFORME','U') IS NOT NULL
-        AND COL_LENGTH('dbo.CI_CARNET_AVISO','slaHoras') IS NOT NULL
+        AND (@permitirColumnasAnteriores=1 OR (
+          COL_LENGTH('dbo.CI_CARNET_AVISO','slaHoras') IS NULL
+          AND COL_LENGTH('dbo.CI_CARNET_AVISO','diasHabiles') IS NULL
+          AND COL_LENGTH('dbo.CI_CARNET_AVISO','zonaHoraria') IS NULL))
         AND COL_LENGTH('dbo.CI_CARNET_AVISO','slaMinutos') IS NOT NULL
         AND COL_LENGTH('dbo.CI_CARNET_AVISO','fechaCorreoFinal') IS NOT NULL
         AND COL_LENGTH('dbo.CI_CARNET_AVISO_INFORME','idCarnet') IS NOT NULL
@@ -30,7 +34,9 @@ export class NotificacionesProgramadasRepository {
           WHERE parent_object_id=OBJECT_ID('dbo.CI_CARNET_AVISO') AND is_disabled=0
             AND CHARINDEX('[estado]',definition)>0 AND CHARINDEX('PREPARADO',definition)=0)
         AND COL_LENGTH('dbo.CI_CARNET_AVISO','correoInicial') >= 1000
-        THEN 1 ELSE 0 END disponible`);
+        THEN 1 ELSE 0 END disponible`,
+      { permitirColumnasAnteriores },
+    );
     return filas[0]?.disponible === 1;
   }
 
@@ -38,16 +44,26 @@ export class NotificacionesProgramadasRepository {
     cambios: CambioCarnetCorreo[],
     configuracion: Pick<
       ConfiguracionCorreoNotificacionesSeccion,
-      'zonaHoraria' | 'slaMinutos' | 'destinatariosIniciales' | 'informesSla'
+      'slaMinutos' | 'destinatariosIniciales' | 'informesSla' | 'reglasSla'
     >,
     prepararSla = false,
   ): Promise<string[]> {
     const informesSla = new Set(configuracion.informesSla);
+    const plazos = new Map(
+      configuracion.reglasSla
+        .filter((regla) => regla.activa)
+        .map((regla) => [regla.idInforme, regla.slaMinutos]),
+    );
     return this.sql.ejecutarEnTransaccion(async (ejecutar) => {
       const avisos: string[] = [];
       const grupos = new Map<
         string,
-        { cambio: CambioCarnetCorreo; aplicaSla: boolean; informes: Map<number, string | null> }
+        {
+          cambio: CambioCarnetCorreo;
+          aplicaSla: boolean;
+          slaMinutos: number | null;
+          informes: Map<number, string | null>;
+        }
       >();
       for (const cambio of cambios) {
         if (cambio.tipo !== 'asignacion') {
@@ -58,10 +74,13 @@ export class NotificacionesProgramadasRepository {
         if (aplicaSla && (!prepararSla || !cambio.idCarnet)) {
           throw new Error('La asignación con SLA debe registrarse inactiva antes de confirmarse.');
         }
-        const clave = `${cambio.idPosicion}:${aplicaSla}`;
+        const slaMinutos = aplicaSla
+          ? (plazos.get(cambio.idInforme) ?? configuracion.slaMinutos)
+          : null;
+        const clave = `${cambio.idPosicion}:${aplicaSla}:${slaMinutos}`;
         let grupo = grupos.get(clave);
         if (!grupo) {
-          grupo = { cambio, aplicaSla, informes: new Map() };
+          grupo = { cambio, aplicaSla, slaMinutos, informes: new Map() };
           grupos.set(clave, grupo);
         }
         grupo.informes.set(cambio.idInforme, cambio.idCarnet ?? null);
@@ -71,9 +90,9 @@ export class NotificacionesProgramadasRepository {
         // El SLA conserva UTC, independientemente del DEFAULT local de la tabla.
         await ejecutar(
           `INSERT INTO dbo.CI_CARNET_AVISO
-          (idAviso,idPosicion,correoInicial,diasHabiles,slaMinutos,zonaHoraria,usuario,origen,estado,
+          (idAviso,idPosicion,correoInicial,slaMinutos,usuario,origen,estado,
             fechaCreacion,proximoIntento,fechaProgramada,ultimoError)
-          VALUES (@idAviso,@idPosicion,@correoInicial,0,@slaMinutos,@zonaHoraria,@usuario,@origen,@estado,
+          VALUES (@idAviso,@idPosicion,@correoInicial,@slaMinutos,@usuario,@origen,@estado,
             SYSUTCDATETIME(),SYSUTCDATETIME(),
             CASE WHEN @estado='USUARIO' THEN SYSUTCDATETIME() ELSE NULL END,
             CASE WHEN @estado='PREPARADO' THEN N'Pendiente de confirmar el alta Oracle. Si persiste, requiere conciliación.' ELSE NULL END)`,
@@ -81,8 +100,7 @@ export class NotificacionesProgramadasRepository {
             idAviso,
             idPosicion: grupo.cambio.idPosicion,
             correoInicial: grupo.aplicaSla ? configuracion.destinatariosIniciales.join(',') : null,
-            slaMinutos: grupo.aplicaSla ? configuracion.slaMinutos : null,
-            zonaHoraria: configuracion.zonaHoraria,
+            slaMinutos: grupo.slaMinutos,
             usuario: grupo.cambio.usuario,
             origen: grupo.cambio.origen,
             estado: grupo.aplicaSla ? 'PREPARADO' : 'USUARIO',
@@ -314,7 +332,7 @@ export class NotificacionesProgramadasRepository {
     const [conteo, registros] = await Promise.all([
       this.sql.ejecutar<{ total: number }>('SELECT COUNT(*) total FROM dbo.CI_CARNET_AVISO'),
       this.sql.ejecutar(
-        `SELECT idAviso,idPosicion,correoInicial,diasHabiles,slaHoras,slaMinutos,zonaHoraria,usuario,origen,estado,
+        `SELECT idAviso,idPosicion,correoInicial,slaMinutos,usuario,origen,estado,
         fechaCreacion,fechaInicial,fechaProgramada,fechaCorreoFinal,fechaFinal,destinatarioFinal,intentos,ultimoError,
         (SELECT COUNT(*) FROM dbo.CI_CARNET_AVISO_INFORME d WHERE d.idAviso=a.idAviso AND d.cancelado=0) informes,
         (SELECT COUNT(*) FROM dbo.CI_CARNET_AVISO_INFORME d WHERE d.idAviso=a.idAviso AND d.cancelado=1) cancelados

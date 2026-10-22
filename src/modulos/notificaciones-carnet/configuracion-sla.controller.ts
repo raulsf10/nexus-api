@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RequiereModulo } from '../../comun/decoradores/requiere-modulo.decorator';
 import { UsuarioActual } from '../../comun/decoradores/usuario-actual.decorator';
@@ -6,6 +6,7 @@ import { UsuarioJwtInterface } from '../../comun/interfaces/usuario-jwt.interfac
 import { RequiereModuloGuard } from '../autenticacion/guardias/requiere-modulo.guard';
 import { ConfiguracionSlaService } from './configuracion-sla.service';
 import { GuardarConfiguracionSlaDto } from './dto/guardar-configuracion-sla.dto';
+import { GuardarSlaInformeDto } from './dto/guardar-sla-informe.dto';
 
 @ApiTags('Configuración SLA')
 @ApiBearerAuth()
@@ -21,5 +22,14 @@ export class ConfiguracionSlaController {
   @Put()
   guardar(@Body() dto: GuardarConfiguracionSlaDto, @UsuarioActual() usuario: UsuarioJwtInterface) {
     return this.servicio.guardar(dto, usuario.usuario);
+  }
+
+  @Put('informes/:idInforme')
+  guardarInforme(
+    @Param('idInforme', ParseIntPipe) idInforme: number,
+    @Body() dto: GuardarSlaInformeDto,
+    @UsuarioActual() usuario: UsuarioJwtInterface,
+  ) {
+    return this.servicio.guardarInforme(idInforme, dto, usuario.usuario);
   }
 }

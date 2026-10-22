@@ -11,6 +11,7 @@ import { HistorialCarnetRepository } from './historial-carnet.repository';
 const TAMANIO_PAGINA_POR_DEFECTO = 50;
 
 interface CambioHistorial {
+  idVersionSolicitud?: number;
   usuario: string;
   accion: AccionHistorial;
   fkPosicion: number;
@@ -27,6 +28,10 @@ export class HistorialCarnetService {
     private readonly informes: InformesRepository,
     private readonly logger: LoggerService,
   ) {}
+
+  asegurarVinculoSolicitud(): Promise<void> {
+    return this.repositorio.asegurarVinculoSolicitud();
+  }
 
   async consultar(filtros: ConsultarHistorialDto): Promise<ResultadoHistorial> {
     const pagina = filtros.pagina ?? 1;
@@ -73,6 +78,7 @@ export class HistorialCarnetService {
         nombreInforme,
         frecuencia: cambio.frecuencia ?? null,
         origen: cambio.origen,
+        idVersionSolicitud: cambio.idVersionSolicitud,
       });
     } catch (error) {
       this.logger.advertencia('No se pudo registrar el historial de carnet', {

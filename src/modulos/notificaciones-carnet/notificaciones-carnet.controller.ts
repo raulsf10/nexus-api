@@ -90,7 +90,7 @@ export class NotificacionesCarnetController {
     if (!(await this.repositorio.disponible())) {
       throw new ExcepcionNegocio(
         CodigosError.SQL_SERVER_ERROR,
-        'Falta aplicar db/notificaciones_escalonadas_carnet.sql en SQL Server.',
+        'Falta actualizar las tablas de avisos en SQL Server. Revisa db/simplificar_carnet_aviso.sql.',
         503,
       );
     }

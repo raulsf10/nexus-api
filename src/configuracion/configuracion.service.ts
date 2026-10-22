@@ -9,11 +9,17 @@ import {
   ConfiguracionLogSeccion,
   ConfiguracionOracleSeccion,
   ConfiguracionSqlServerSeccion,
+  ReglaSlaInforme,
 } from './interfaces/configuracion-app.interface';
 
 @Injectable()
 export class ConfiguracionService {
   private slaGuardado?: { slaMinutos: number; destinatariosIniciales: string[] };
+  private reglasSlaGuardadas: ReglaSlaInforme[] = [];
+
+  establecerReglasSla(reglas: ReglaSlaInforme[]): void {
+    this.reglasSlaGuardadas = reglas.map((regla) => ({ ...regla }));
+  }
 
   establecerSlaGuardado(valor?: { slaMinutos: number; destinatariosIniciales: string[] }): void {
     this.slaGuardado = valor;
@@ -83,6 +89,18 @@ export class ConfiguracionService {
   }
 
   obtenerCorreoNotificaciones(): ConfiguracionCorreoNotificacionesSeccion {
+    const slaMinutos =
+      this.slaGuardado?.slaMinutos ??
+      Number(
+        this.configService.get<number>('CARNET_SLA_MINUTOS') ??
+          Number(this.configService.get<number>('CARNET_SLA_HORAS') ?? 24) * 60,
+      );
+    const reglas = new Map<number, ReglaSlaInforme>(
+      separarLista(this.configService.get<string>('CARNET_SLA_INFORMES') ?? '')
+        .map(Number)
+        .map((idInforme) => [idInforme, { idInforme, slaMinutos, activa: true }]),
+    );
+    for (const regla of this.reglasSlaGuardadas) reglas.set(regla.idInforme, { ...regla });
     const destinatariosDefault = (
       this.configService.get<string>('ALERTA_DESTINATARIOS_DEFAULT') ?? ''
     )
@@ -93,20 +111,14 @@ export class ConfiguracionService {
       usarCorreoPosicion: this.configService.get<boolean>('CARNET_USAR_CORREO_POSICION') ?? false,
       escalonadosActivos:
         this.configService.get<boolean>('CARNET_AVISOS_ESCALONADOS_ACTIVOS') ?? false,
-      slaMinutos:
-        this.slaGuardado?.slaMinutos ??
-        Number(
-          this.configService.get<number>('CARNET_SLA_MINUTOS') ??
-            Number(this.configService.get<number>('CARNET_SLA_HORAS') ?? 24) * 60,
-        ),
+      slaMinutos,
       destinatariosIniciales:
         this.slaGuardado?.destinatariosIniciales ??
         separarCorreos(this.configService.get<string>('CARNET_SLA_DESTINATARIOS') ?? ''),
-      informesSla: [
-        ...new Set(
-          separarLista(this.configService.get<string>('CARNET_SLA_INFORMES') ?? '').map(Number),
-        ),
-      ],
+      reglasSla: [...reglas.values()],
+      informesSla: [...reglas.values()]
+        .filter((regla) => regla.activa)
+        .map((regla) => regla.idInforme),
       zonaHoraria:
         this.configService.get<string>('CARNET_AVISOS_ZONA_HORARIA') ?? 'America/Mexico_City',
       intervaloSegundos: Number(

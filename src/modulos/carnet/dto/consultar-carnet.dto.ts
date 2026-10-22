@@ -1,8 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { FiltrosPlantillaDto } from '../../../comun/dto/filtros-plantilla.dto';
 
-export class ConsultarCarnetDto {
+export class ConsultarCarnetDto extends FiltrosPlantillaDto {
   @ApiPropertyOptional({ description: 'Página (desde 1).', default: 1 })
   @IsOptional()
   @Type(() => Number)

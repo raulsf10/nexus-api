@@ -45,7 +45,9 @@ export class CarnetService {
     informes: InformeLoteCarnet[],
     usuario: string,
   ): Promise<void> {
-    await this.sla.asegurarDisponible(informes.map((informe) => informe.fkVeo));
+    const configuracionSla = await this.sla.asegurarDisponible(
+      informes.map((informe) => informe.fkVeo),
+    );
     const cambios: CambioCarnetCorreo[] = informes.map((informe) => ({
       idPosicion: skEmpleado,
       idInforme: informe.fkVeo,
@@ -82,7 +84,7 @@ export class CarnetService {
           );
         }
         await this.carnetOracle.agregar(skEmpleado, informe.fkVeo, ejecutor);
-        if (this.sla.aplica(informe.fkVeo)) {
+        if (this.sla.aplica(informe.fkVeo, configuracionSla)) {
           await this.carnetOracle.actualizarActivo(skEmpleado, informe.fkVeo, 0, ejecutor);
         }
         const frecuencia = this.normalizarFrecuencia(informe.frecuencia);
@@ -103,7 +105,7 @@ export class CarnetService {
           );
         }
       }
-      avisosPreparados = await this.sla.prepararAsignaciones(cambios, ejecutor);
+      avisosPreparados = await this.sla.prepararAsignaciones(cambios, ejecutor, configuracionSla);
     });
 
     for (const informe of informes) {
@@ -112,7 +114,7 @@ export class CarnetService {
         await this.carnetSqlServer.agregar(
           skEmpleado,
           informe.fkVeo,
-          this.sla.aplica(informe.fkVeo) ? 0 : 1,
+          this.sla.aplica(informe.fkVeo, configuracionSla) ? 0 : 1,
         );
         if (frecuencia !== null) {
           await this.carnetSqlServer.actualizarFrecuencia(skEmpleado, informe.fkVeo, frecuencia);
@@ -128,7 +130,7 @@ export class CarnetService {
       });
     }
     await this.sla.confirmarAsignaciones(avisosPreparados);
-    await this.notificaciones.enviarCambios(cambios);
+    await this.notificaciones.enviarCambios(cambios, configuracionSla);
   }
 
   async actualizarEstatusInstalacion(

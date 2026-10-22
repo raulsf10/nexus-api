@@ -2,6 +2,10 @@ import { AccionHistorial } from '../enums/accion-historial.enum';
 import { OrigenHistorial } from '../enums/origen-historial.enum';
 
 export interface HistorialCarnetEntidad {
+  idSolicitud: number | null;
+  fechaSolicitud: string | null;
+  fechaAtencion: string | null;
+  slaMinutosHabiles: number | null;
   idHistorial: number;
   usuario: string;
   accion: AccionHistorial;
@@ -25,6 +29,7 @@ export interface ResultadoHistorial {
 // resueltos por la app (snapshot), porque el SQL Server de historial no ve los
 // catálogos Oracle.
 export interface RegistroHistorial {
+  idVersionSolicitud?: number;
   usuario: string;
   accion: AccionHistorial;
   fkPosicion: number;

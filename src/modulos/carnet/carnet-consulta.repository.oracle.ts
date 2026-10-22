@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { FiltrosPlantillaDto } from '../../comun/dto/filtros-plantilla.dto';
+import { filtrosPlantilla } from '../../comun/utilidades/filtros-plantilla';
 import { CarnetEstatusInstalacionEsquemaService } from '../../base-datos/oracle/carnet-estatus-instalacion-esquema.service';
 import { OracleService } from '../../base-datos/oracle/oracle.service';
 import { RegistroCarnetEntidad } from './entidades/registro-carnet.entidad';
@@ -51,15 +53,18 @@ export class CarnetConsultaRepositoryOracle {
     private readonly esquemaExcepciones: ExcepcionesCarnetEsquemaService,
   ) {}
 
-  async contar(busqueda?: string): Promise<number> {
+  async contar(busqueda?: string, filtros: FiltrosPlantillaDto = {}): Promise<number> {
     const estatusDisponible = await this.esquemaEstatusInstalacion.estaDisponible();
     const excepcionesDisponibles = await this.esquemaExcepciones.estaDisponible();
     const sql = `
       SELECT COUNT(*) AS total
       ${desdeCarnet(estatusDisponible)}
-      ${this.clausulaFiltros(busqueda, estatusDisponible, excepcionesDisponibles)}
+      ${this.clausulaFiltros(busqueda, estatusDisponible, excepcionesDisponibles, filtros)}
     `;
-    const filas = await this.oracle.ejecutar<FilaOracle>(sql, this.parametrosFiltros(busqueda));
+    const filas = await this.oracle.ejecutar<FilaOracle>(sql, {
+      ...this.parametrosFiltros(busqueda),
+      ...filtrosPlantilla(filtros).parametros,
+    });
     return Number(filas[0]?.['TOTAL'] ?? 0);
   }
 
@@ -67,6 +72,7 @@ export class CarnetConsultaRepositoryOracle {
     pagina: number,
     tamanioPagina: number,
     busqueda?: string,
+    filtros: FiltrosPlantillaDto = {},
   ): Promise<RegistroCarnetEntidad[]> {
     const desde = (pagina - 1) * tamanioPagina;
     const hasta = desde + tamanioPagina;
@@ -113,13 +119,14 @@ export class CarnetConsultaRepositoryOracle {
             ORDER BY vc.fechaalta ASC, vc.fk_veo ASC, vc.fk_posicion ASC, vc.sk_carnet ASC
           ) AS rn
         ${desdeCarnet(estatusDisponible)}
-        ${this.clausulaFiltros(busqueda, estatusDisponible, excepcionesDisponibles)}
+        ${this.clausulaFiltros(busqueda, estatusDisponible, excepcionesDisponibles, filtros)}
       )
       WHERE rn > :desde AND rn <= :hasta
       ORDER BY rn
     `;
     const filas = await this.oracle.ejecutar<FilaOracle>(sql, {
       ...this.parametrosFiltros(busqueda),
+      ...filtrosPlantilla(filtros).parametros,
       desde,
       hasta,
     });
@@ -130,8 +137,9 @@ export class CarnetConsultaRepositoryOracle {
     busqueda: string | undefined,
     estatusDisponible: boolean,
     excepcionesDisponibles: boolean,
+    filtros: FiltrosPlantillaDto,
   ): string {
-    const condiciones: string[] = [];
+    const condiciones = filtrosPlantilla(filtros).condiciones;
     if (busqueda) {
       const condicionEstatus = estatusDisponible
         ? "\n    OR UPPER(cei.estatus_instalacion) LIKE '%' || UPPER(:busqueda) || '%'"

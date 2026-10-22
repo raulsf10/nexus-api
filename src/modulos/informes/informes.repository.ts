@@ -12,6 +12,29 @@ export class InformesRepository {
     private readonly esquemaEstatusInstalacion: CarnetEstatusInstalacionEsquemaService,
   ) {}
 
+  async obtenerPorIds(ids: number[]): Promise<InformeEntidad[]> {
+    const informes: InformeEntidad[] = [];
+    for (let inicio = 0; inicio < ids.length; inicio += 500) {
+      const parametros = Object.fromEntries(
+        ids.slice(inicio, inicio + 500).map((id, indice) => [`id${indice}`, id]),
+      );
+      const filas = await this.oracle.ejecutar<FilaOracle>(
+        `SELECT sk_veo, dsnombrelargo FROM dwh_suka.dim_veo
+         WHERE sk_veo IN (${Object.keys(parametros)
+           .map((clave) => `:${clave}`)
+           .join(',')})`,
+        parametros,
+      );
+      informes.push(
+        ...filas.map((fila) => ({
+          skVeo: Number(fila['SK_VEO']),
+          nombre: String(fila['DSNOMBRELARGO'] ?? '').trim(),
+        })),
+      );
+    }
+    return informes;
+  }
+
   async buscar(filtro: string): Promise<InformeEntidad[]> {
     const sql = `
       SELECT * FROM (

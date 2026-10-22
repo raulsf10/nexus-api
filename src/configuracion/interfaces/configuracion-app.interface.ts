@@ -47,7 +47,14 @@ export interface ConfiguracionLogSeccion {
   retencionDias: number;
 }
 
+export interface ReglaSlaInforme {
+  idInforme: number;
+  slaMinutos: number;
+  activa: boolean;
+}
+
 export interface ConfiguracionCorreoNotificacionesSeccion {
+  reglasSla: ReglaSlaInforme[];
   escalonadosActivos: boolean;
   slaMinutos: number;
   destinatariosIniciales: string[];
