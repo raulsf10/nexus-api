@@ -3,11 +3,13 @@ export interface DatosPlantillaCarnet {
   idPosicion: number;
   usuarioAsignado: string | null;
   correoAsignado: string | null;
+  mensajeInicial?: string | null;
   informes: Array<{
     idInforme: number;
     nombre: string;
     frecuencia: string | null;
     estatusInstalacion: string | null;
     frecuenciaAnterior?: string | null;
+    mensajeUsuario?: string | null;
   }>;
 }

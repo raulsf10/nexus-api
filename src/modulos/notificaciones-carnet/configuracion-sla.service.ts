@@ -7,11 +7,14 @@ import { CodigosError } from '../../comun/enums/codigos-error.enum';
 import { GuardarConfiguracionSlaDto } from './dto/guardar-configuracion-sla.dto';
 import { GuardarSlaInformeDto } from './dto/guardar-sla-informe.dto';
 import { InformesRepository } from '../informes/informes.repository';
+import { mensajeAsignacionPredeterminado } from './plantilla-carnet';
 
 @Injectable()
 export class ConfiguracionSlaService implements OnModuleInit {
   private origen: 'entorno' | 'base-datos' = 'entorno';
   private informesDisponibles = false;
+  private mensajeInicialDisponible = false;
+  private mensajeUsuarioDisponible = false;
   constructor(
     private readonly sql: SqlServerService,
     private readonly configuracion: ConfiguracionService,
@@ -34,6 +37,12 @@ export class ConfiguracionSlaService implements OnModuleInit {
   }
 
   async actualizarEfectiva(): Promise<void> {
+    const columnas = await this.sql.ejecutar<{ inicial: number | null; usuario: number | null }>(
+      `SELECT COL_LENGTH('dbo.CI_CONFIGURACION_SLA', 'mensaje_inicial') AS inicial,
+        COL_LENGTH('dbo.CI_CONFIGURACION_SLA_INFORME', 'mensaje_usuario') AS usuario`,
+    );
+    this.mensajeInicialDisponible = !!columnas[0]?.inicial;
+    this.mensajeUsuarioDisponible = !!columnas[0]?.usuario;
     const filas = await this.sql.ejecutar<{ existe: number | null }>(
       "SELECT OBJECT_ID('dbo.CI_CONFIGURACION_SLA', 'U') AS existe",
     );
@@ -48,8 +57,15 @@ export class ConfiguracionSlaService implements OnModuleInit {
     );
     this.informesDisponibles = !!esquema[0]?.existe;
     const reglas = this.informesDisponibles
-      ? await this.sql.ejecutar<{ idInforme: number; slaMinutos: number; activa: boolean }>(
-          'SELECT id_informe AS idInforme, sla_minutos AS slaMinutos, activo AS activa FROM dbo.CI_CONFIGURACION_SLA_INFORME',
+      ? await this.sql.ejecutar<{
+          idInforme: number;
+          slaMinutos: number;
+          activa: boolean;
+          mensajeUsuario: string | null;
+        }>(
+          this.mensajeUsuarioDisponible
+            ? 'SELECT id_informe AS idInforme, sla_minutos AS slaMinutos, activo AS activa, mensaje_usuario AS mensajeUsuario FROM dbo.CI_CONFIGURACION_SLA_INFORME'
+            : 'SELECT id_informe AS idInforme, sla_minutos AS slaMinutos, activo AS activa, NULL AS mensajeUsuario FROM dbo.CI_CONFIGURACION_SLA_INFORME',
         )
       : [];
     this.configuracion.establecerReglasSla(
@@ -57,6 +73,7 @@ export class ConfiguracionSlaService implements OnModuleInit {
         idInforme: Number(regla.idInforme),
         slaMinutos: Number(regla.slaMinutos),
         activa: !!regla.activa,
+        mensajeUsuario: regla.mensajeUsuario ?? null,
       })),
     );
   }
@@ -72,12 +89,22 @@ export class ConfiguracionSlaService implements OnModuleInit {
     return {
       slaMinutos: cfg.slaMinutos,
       destinatariosIniciales: cfg.destinatariosIniciales,
+      mensajeInicial: cfg.mensajeInicial,
       origenConfiguracion: this.origen,
       activo: cfg.escalonadosActivos,
       informesSla: cfg.informesSla,
       informesDisponibles: this.informesDisponibles,
       reglas: cfg.reglasSla
-        .map((regla) => ({ ...regla, nombreInforme: nombres.get(regla.idInforme) ?? null }))
+        .map((regla) => {
+          const predeterminado = mensajeAsignacionPredeterminado(regla.idInforme);
+          const mensaje = regla.mensajeUsuario?.trim() || predeterminado;
+          return {
+            ...regla,
+            nombreInforme: nombres.get(regla.idInforme) ?? null,
+            mensajeUsuario: mensaje,
+            mensajePersonalizado: mensaje !== predeterminado,
+          };
+        })
         .sort((a, b) => a.idInforme - b.idInforme),
     };
   }
@@ -97,6 +124,7 @@ export class ConfiguracionSlaService implements OnModuleInit {
     if (!(await this.informes.obtenerPorSkVeo(idInforme))) {
       throw new ExcepcionNegocio(CodigosError.VALIDACION, 'El informe no existe.', 404);
     }
+    this.validarColumnaMensaje(this.mensajeUsuarioDisponible, dto.mensajeUsuario);
     await this.sql.ejecutarEnTransaccion(async (ejecutar) => {
       await ejecutar(
         `UPDATE dbo.CI_CONFIGURACION_SLA_INFORME WITH (UPDLOCK, HOLDLOCK)
@@ -108,12 +136,20 @@ export class ConfiguracionSlaService implements OnModuleInit {
           VALUES (@idInforme,@minutos,@activa,@usuario,GETDATE());`,
         { idInforme, minutos: dto.slaMinutos, activa: dto.activa, usuario },
       );
+      if (this.mensajeUsuarioDisponible && dto.mensajeUsuario !== undefined) {
+        await ejecutar(
+          'UPDATE dbo.CI_CONFIGURACION_SLA_INFORME SET mensaje_usuario=@mensaje WHERE id_informe=@idInforme',
+          { idInforme, mensaje: dto.mensajeUsuario?.trim() || null },
+        );
+      }
     });
     await this.actualizarEfectiva();
     return { exitoso: true };
   }
 
   async guardar(dto: GuardarConfiguracionSlaDto, usuario: string) {
+    await this.actualizarEfectiva();
+    this.validarColumnaMensaje(this.mensajeInicialDisponible, dto.mensajeInicial);
     const correos = [
       ...new Set(dto.destinatariosIniciales.map((correo) => correo.trim().toLowerCase())),
     ];
@@ -135,24 +171,33 @@ export class ConfiguracionSlaService implements OnModuleInit {
           VALUES (1, @minutos, @correos, @usuario, GETDATE());`,
         { minutos: dto.slaMinutos, correos: correos.join(','), usuario },
       );
+      if (this.mensajeInicialDisponible && dto.mensajeInicial !== undefined) {
+        await ejecutar(
+          'UPDATE dbo.CI_CONFIGURACION_SLA SET mensaje_inicial=@mensaje WHERE id_configuracion=1',
+          { mensaje: dto.mensajeInicial?.trim() || null },
+        );
+      }
     });
-    this.configuracion.establecerSlaGuardado({
-      slaMinutos: dto.slaMinutos,
-      destinatariosIniciales: correos,
-    });
-    this.origen = 'base-datos';
+    await this.actualizarEfectiva();
     return { exitoso: true };
   }
 
   private async cargar(): Promise<void> {
-    const filas = await this.sql.ejecutar<{ sla_minutos: number; correos_iniciales: string }>(
-      'SELECT sla_minutos, correos_iniciales FROM dbo.CI_CONFIGURACION_SLA WHERE id_configuracion = 1',
+    const filas = await this.sql.ejecutar<{
+      sla_minutos: number;
+      correos_iniciales: string;
+      mensaje_inicial: string | null;
+    }>(
+      this.mensajeInicialDisponible
+        ? 'SELECT sla_minutos, correos_iniciales, mensaje_inicial FROM dbo.CI_CONFIGURACION_SLA WHERE id_configuracion = 1'
+        : 'SELECT sla_minutos, correos_iniciales, NULL AS mensaje_inicial FROM dbo.CI_CONFIGURACION_SLA WHERE id_configuracion = 1',
     );
     const fila = filas[0];
     this.configuracion.establecerSlaGuardado(
       fila
         ? {
             slaMinutos: fila.sla_minutos,
+            mensajeInicial: fila.mensaje_inicial ?? null,
             destinatariosIniciales: fila.correos_iniciales
               .split(',')
               .map((correo) => correo.trim())
@@ -161,5 +206,15 @@ export class ConfiguracionSlaService implements OnModuleInit {
         : undefined,
     );
     this.origen = fila ? 'base-datos' : 'entorno';
+  }
+
+  private validarColumnaMensaje(disponible: boolean, mensaje: string | null | undefined): void {
+    if (!disponible && mensaje?.trim()) {
+      throw new ExcepcionNegocio(
+        CodigosError.VALIDACION,
+        'Falta aplicar la actualización de mensajes SLA en SQL Server.',
+        503,
+      );
+    }
   }
 }

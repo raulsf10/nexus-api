@@ -14,14 +14,22 @@ import {
 
 @Injectable()
 export class ConfiguracionService {
-  private slaGuardado?: { slaMinutos: number; destinatariosIniciales: string[] };
+  private slaGuardado?: {
+    slaMinutos: number;
+    destinatariosIniciales: string[];
+    mensajeInicial?: string | null;
+  };
   private reglasSlaGuardadas: ReglaSlaInforme[] = [];
 
   establecerReglasSla(reglas: ReglaSlaInforme[]): void {
     this.reglasSlaGuardadas = reglas.map((regla) => ({ ...regla }));
   }
 
-  establecerSlaGuardado(valor?: { slaMinutos: number; destinatariosIniciales: string[] }): void {
+  establecerSlaGuardado(valor?: {
+    slaMinutos: number;
+    destinatariosIniciales: string[];
+    mensajeInicial?: string | null;
+  }): void {
     this.slaGuardado = valor;
   }
 
@@ -112,6 +120,7 @@ export class ConfiguracionService {
       escalonadosActivos:
         this.configService.get<boolean>('CARNET_AVISOS_ESCALONADOS_ACTIVOS') ?? false,
       slaMinutos,
+      mensajeInicial: this.slaGuardado?.mensajeInicial ?? null,
       destinatariosIniciales:
         this.slaGuardado?.destinatariosIniciales ??
         separarCorreos(this.configService.get<string>('CARNET_SLA_DESTINATARIOS') ?? ''),

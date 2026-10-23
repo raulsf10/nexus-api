@@ -1,6 +1,17 @@
 import { Transform } from 'class-transformer';
-import { ApiProperty } from '@nestjs/swagger';
-import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsEmail, IsInt, Max, Min } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
+  IsEmail,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class GuardarConfiguracionSlaDto {
   @ApiProperty({ minimum: 1, maximum: 525600, example: 1440 })
@@ -22,4 +33,16 @@ export class GuardarConfiguracionSlaDto {
   )
   @IsEmail({}, { each: true, message: 'Captura correos válidos separados por coma.' })
   destinatariosIniciales!: string[];
+
+  @ApiPropertyOptional({
+    maxLength: 2000,
+    nullable: true,
+    description:
+      'Texto debajo de la tabla del aviso inicial SLA. Vacío conserva el mensaje predeterminado.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  mensajeInicial?: string | null;
 }

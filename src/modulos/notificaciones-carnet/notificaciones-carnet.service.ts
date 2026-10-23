@@ -17,6 +17,7 @@ import { SlaCarnetService } from './sla-carnet.service';
 import { ServiceUnavailableException } from '@nestjs/common';
 import { asuntoCarnet, htmlCarnet, textoCarnet } from './plantilla-carnet';
 import { DatosPlantillaCarnet } from './interfaces/datos-plantilla-carnet.interface';
+import { ConfiguracionSlaService } from './configuracion-sla.service';
 
 interface GrupoCambioCorreo {
   idPosicion: number;
@@ -42,6 +43,7 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     private readonly logger: LoggerService,
     private readonly programadas: NotificacionesProgramadasRepository,
     private readonly sla: SlaCarnetService,
+    private readonly configuracionSla: ConfiguracionSlaService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -297,11 +299,13 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
       this.repositorio.obtenerCorreoPorPosicion(grupo.idPosicion),
     ]);
     const porInforme = new Map(asignaciones.map((asignacion) => [asignacion.fkVeo, asignacion]));
+    const mensajes = new Map(cfg.reglasSla.map((regla) => [regla.idInforme, regla.mensajeUsuario]));
     const datos: DatosPlantillaCarnet = {
       tipo: previo ? 'aviso-inicial' : grupo.tipo,
       idPosicion: grupo.idPosicion,
       usuarioAsignado,
       correoAsignado,
+      mensajeInicial: previo ? cfg.mensajeInicial : null,
       informes: informes.map((informe) => {
         const asignacion = porInforme.get(informe.idInforme);
         const frecuencia = grupo.cambiosFrecuencia?.get(informe.idInforme);
@@ -311,6 +315,8 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
           frecuencia: frecuencia?.nueva ?? asignacion?.frecuencia ?? null,
           frecuenciaAnterior: frecuencia?.anterior ?? null,
           estatusInstalacion: asignacion?.estatusInstalacion ?? null,
+          mensajeUsuario:
+            !previo && aviso?.slaMinutos != null ? (mensajes.get(informe.idInforme) ?? null) : null,
         };
       }),
     };
@@ -329,10 +335,12 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
   }
 
   private async procesarPendientes(): Promise<void> {
-    const cfg = this.configuracion.obtenerCorreoNotificaciones();
+    let cfg = this.configuracion.obtenerCorreoNotificaciones();
     if (this.procesando || this.cerrando || !cfg.escalonadosActivos) return;
     this.procesando = true;
     try {
+      await this.configuracionSla.actualizarEfectiva();
+      cfg = this.configuracion.obtenerCorreoNotificaciones();
       if (!(await this.programadas.disponible())) {
         this.logger.advertencia(
           'Avisos escalonados pausados: falta actualizar la estructura de SQL Server.',
@@ -505,7 +513,7 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
       }
     }
 
-    if (correos.length === 0) correos = cfg.destinatariosDefault;
+    if (!cfg.usarCorreoPosicion) correos = cfg.destinatariosDefault;
     return this.validarDestinatarios(correos);
   }
 

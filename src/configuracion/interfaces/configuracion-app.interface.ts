@@ -51,6 +51,7 @@ export interface ReglaSlaInforme {
   idInforme: number;
   slaMinutos: number;
   activa: boolean;
+  mensajeUsuario?: string | null;
 }
 
 export interface ConfiguracionCorreoNotificacionesSeccion {
@@ -58,6 +59,7 @@ export interface ConfiguracionCorreoNotificacionesSeccion {
   escalonadosActivos: boolean;
   slaMinutos: number;
   destinatariosIniciales: string[];
+  mensajeInicial: string | null;
   informesSla: number[];
   zonaHoraria: string;
   intervaloSegundos: number;

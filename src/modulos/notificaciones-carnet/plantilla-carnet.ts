@@ -16,6 +16,10 @@ interface SeccionPlantilla {
   mensaje: string | null;
 }
 
+export function mensajeAsignacionPredeterminado(idInforme: number): string {
+  return PDIS_INFORMATIVOS.has(idInforme) ? MENSAJE_INFORMATIVO : MENSAJE_ASIGNACION;
+}
+
 export function asuntoCarnet(datos: DatosPlantillaCarnet): string {
   const titulos: Record<DatosPlantillaCarnet['tipo'], string> = {
     asignacion: 'Asignación de informes',
@@ -88,15 +92,23 @@ function obtenerSecciones(datos: DatosPlantillaCarnet): SeccionPlantilla[] {
       const informes = datos.informes.filter(
         (informe) => PDIS_INFORMATIVOS.has(informe.idInforme) === informativo,
       );
-      return informes.length
-        ? seccionInformes(
-            { ...datos, informes },
-            informativo ? MENSAJE_INFORMATIVO : MENSAJE_ASIGNACION,
-          )
-        : [];
+      const grupos = new Map<string, DatosPlantillaCarnet['informes']>();
+      for (const informe of informes) {
+        const mensaje =
+          informe.mensajeUsuario?.trim() || mensajeAsignacionPredeterminado(informe.idInforme);
+        const grupo = grupos.get(mensaje) ?? [];
+        grupo.push(informe);
+        grupos.set(mensaje, grupo);
+      }
+      return [...grupos].flatMap(([mensaje, grupo]) =>
+        seccionInformes({ ...datos, informes: grupo }, mensaje),
+      );
     });
   }
-  return seccionInformes(datos, datos.tipo === 'eliminacion' ? MENSAJE_BAJA : null);
+  return seccionInformes(
+    datos,
+    datos.tipo === 'eliminacion' ? MENSAJE_BAJA : datos.mensajeInicial?.trim() || null,
+  );
 }
 
 function seccionInformes(datos: DatosPlantillaCarnet, mensaje: string | null): SeccionPlantilla[] {
@@ -168,7 +180,7 @@ function valorDisponible(valor: string | null | undefined): string {
 }
 
 function parrafoHtml(texto: string): string {
-  return `<p style="margin:0 0 14px;">${escaparHtml(texto)}</p>`;
+  return `<p style="margin:0 0 14px;">${escaparHtml(texto).replace(/\r\n|\r|\n/g, '<br>')}</p>`;
 }
 
 function escaparHtml(texto: string): string {
