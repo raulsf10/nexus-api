@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { separarCorreos, separarLista } from './listas-configuracion';
+import { separarCorreos } from './listas-configuracion';
 import {
   ConfiguracionAdSeccion,
   ConfiguracionAppSeccion,
@@ -97,18 +97,8 @@ export class ConfiguracionService {
   }
 
   obtenerCorreoNotificaciones(): ConfiguracionCorreoNotificacionesSeccion {
-    const slaMinutos =
-      this.slaGuardado?.slaMinutos ??
-      Number(
-        this.configService.get<number>('CARNET_SLA_MINUTOS') ??
-          Number(this.configService.get<number>('CARNET_SLA_HORAS') ?? 24) * 60,
-      );
-    const reglas = new Map<number, ReglaSlaInforme>(
-      separarLista(this.configService.get<string>('CARNET_SLA_INFORMES') ?? '')
-        .map(Number)
-        .map((idInforme) => [idInforme, { idInforme, slaMinutos, activa: true }]),
-    );
-    for (const regla of this.reglasSlaGuardadas) reglas.set(regla.idInforme, { ...regla });
+    const slaMinutos = this.slaGuardado?.slaMinutos ?? 1440;
+    const reglas = this.reglasSlaGuardadas.map((regla) => ({ ...regla }));
     const destinatariosDefault = (
       this.configService.get<string>('ALERTA_DESTINATARIOS_DEFAULT') ?? ''
     )
@@ -124,10 +114,8 @@ export class ConfiguracionService {
       destinatariosIniciales:
         this.slaGuardado?.destinatariosIniciales ??
         separarCorreos(this.configService.get<string>('CARNET_SLA_DESTINATARIOS') ?? ''),
-      reglasSla: [...reglas.values()],
-      informesSla: [...reglas.values()]
-        .filter((regla) => regla.activa)
-        .map((regla) => regla.idInforme),
+      reglasSla: reglas,
+      informesSla: reglas.filter((regla) => regla.activa).map((regla) => regla.idInforme),
       zonaHoraria:
         this.configService.get<string>('CARNET_AVISOS_ZONA_HORARIA') ?? 'America/Mexico_City',
       intervaloSegundos: Number(

@@ -23,5 +23,9 @@ Thumbs.db
 coverage/
 *.tsbuildinfo
 db
+!db/
+db/*
+!db/mensajes_configuracion_sla.sql
+!db/inicializar_mensajes_sla.sql
 deploy
 docs

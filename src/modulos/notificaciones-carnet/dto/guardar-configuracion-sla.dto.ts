@@ -14,11 +14,17 @@ import {
 } from 'class-validator';
 
 export class GuardarConfiguracionSlaDto {
-  @ApiProperty({ minimum: 1, maximum: 525600, example: 1440 })
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 525600,
+    example: 1440,
+    description: 'Valor inicial al agregar un informe; no modifica plazos de informes ni avisos.',
+  })
+  @IsOptional()
   @IsInt()
   @Min(1)
   @Max(525600)
-  slaMinutos!: number;
+  slaMinutos?: number;
 
   @ApiProperty({ type: [String], example: ['responsable@empresa.com'] })
   @IsArray()

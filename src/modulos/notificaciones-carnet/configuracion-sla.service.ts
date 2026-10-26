@@ -31,7 +31,7 @@ export class ConfiguracionSlaService implements OnModuleInit {
       await this.actualizarEfectiva();
     } catch {
       this.logger.advertencia(
-        'Configuración SLA no disponible; se conserva la configuración del entorno.',
+        'No se pudo consultar la configuración SLA en SQL Server; se reintentará antes de asignar informes.',
       );
     }
   }
@@ -162,14 +162,14 @@ export class ConfiguracionSlaService implements OnModuleInit {
     await this.sql.ejecutarEnTransaccion(async (ejecutar) => {
       await ejecutar(
         `UPDATE dbo.CI_CONFIGURACION_SLA WITH (UPDLOCK, HOLDLOCK)
-        SET sla_minutos = @minutos, correos_iniciales = @correos,
+        SET sla_minutos = COALESCE(@minutos, sla_minutos), correos_iniciales = @correos,
             usuario_actualizacion = @usuario, fecha_actualizacion = GETDATE()
         WHERE id_configuracion = 1;
         IF @@ROWCOUNT = 0
           INSERT INTO dbo.CI_CONFIGURACION_SLA
             (id_configuracion, sla_minutos, correos_iniciales, usuario_actualizacion, fecha_actualizacion)
-          VALUES (1, @minutos, @correos, @usuario, GETDATE());`,
-        { minutos: dto.slaMinutos, correos: correos.join(','), usuario },
+          VALUES (1, COALESCE(@minutos, 1440), @correos, @usuario, GETDATE());`,
+        { minutos: dto.slaMinutos ?? null, correos: correos.join(','), usuario },
       );
       if (this.mensajeInicialDisponible && dto.mensajeInicial !== undefined) {
         await ejecutar(

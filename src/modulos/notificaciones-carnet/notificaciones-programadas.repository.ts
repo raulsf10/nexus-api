@@ -44,7 +44,7 @@ export class NotificacionesProgramadasRepository {
     cambios: CambioCarnetCorreo[],
     configuracion: Pick<
       ConfiguracionCorreoNotificacionesSeccion,
-      'slaMinutos' | 'destinatariosIniciales' | 'informesSla' | 'reglasSla'
+      'destinatariosIniciales' | 'informesSla' | 'reglasSla'
     >,
     prepararSla = false,
   ): Promise<string[]> {
@@ -74,9 +74,10 @@ export class NotificacionesProgramadasRepository {
         if (aplicaSla && (!prepararSla || !cambio.idCarnet)) {
           throw new Error('La asignación con SLA debe registrarse inactiva antes de confirmarse.');
         }
-        const slaMinutos = aplicaSla
-          ? (plazos.get(cambio.idInforme) ?? configuracion.slaMinutos)
-          : null;
+        const slaMinutos = aplicaSla ? plazos.get(cambio.idInforme) : null;
+        if (slaMinutos === undefined) {
+          throw new Error('Falta el plazo configurado del informe en SQL Server.');
+        }
         const clave = `${cambio.idPosicion}:${aplicaSla}:${slaMinutos}`;
         let grupo = grupos.get(clave);
         if (!grupo) {

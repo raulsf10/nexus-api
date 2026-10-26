@@ -56,9 +56,10 @@ export const esquemaValidacionEnv = Joi.object({
     .default(''),
   CARNET_USAR_CORREO_POSICION: Joi.boolean().default(false),
   CARNET_AVISOS_ESCALONADOS_ACTIVOS: Joi.boolean().default(false),
-  CARNET_SLA_MINUTOS: Joi.number().integer().min(1).max(525600),
-  // Compatibilidad con instalaciones que todavía no han cambiado su .env.
-  CARNET_SLA_HORAS: Joi.number().integer().min(1).max(8760),
+  // Se ignoran las claves antiguas; los informes y sus plazos se administran en SQL Server.
+  CARNET_SLA_INFORMES: Joi.any().strip(),
+  CARNET_SLA_MINUTOS: Joi.any().strip(),
+  CARNET_SLA_HORAS: Joi.any().strip(),
   CARNET_SLA_DESTINATARIOS: Joi.string()
     .trim()
     .max(1000)
@@ -68,22 +69,6 @@ export const esquemaValidacionEnv = Joi.object({
       const correos = separarLista(valor);
       const correo = Joi.string().email({ tlds: { allow: false } });
       return correos.length && correos.every((elemento) => !correo.validate(elemento).error)
-        ? valor
-        : ayudas.error('any.invalid');
-    })
-    .when('CARNET_AVISOS_ESCALONADOS_ACTIVOS', {
-      is: true,
-      then: Joi.string().invalid('').required(),
-    }),
-  CARNET_SLA_INFORMES: Joi.string()
-    .trim()
-    .max(20000)
-    .allow('')
-    .default('')
-    .custom((valor: string, ayudas) => {
-      const informes = separarLista(valor);
-      return informes.length &&
-        informes.every((id) => /^\d+$/.test(id) && Number(id) > 0 && Number(id) <= 2147483647)
         ? valor
         : ayudas.error('any.invalid');
     }),
