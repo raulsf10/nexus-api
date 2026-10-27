@@ -70,11 +70,7 @@ export class CargaIndicadoresService {
         409,
       );
     }
-    const informes = new Map<number, string | null>();
-    const folios = new Map<string, boolean>();
-    const pares = new Set<string>();
-    const filas = [];
-    for (const [indice, entrada] of entradas.entries()) {
+    const normalizadas = entradas.map((entrada, indice) => {
       const folioJtrac =
         typeof entrada.folioJtrac === 'string' ? entrada.folioJtrac.trim().toUpperCase() : '';
       const numero =
@@ -83,34 +79,60 @@ export class CargaIndicadoresService {
           : NaN;
       const idInforme =
         Number.isSafeInteger(numero) && numero > 0 && numero <= 2147483647 ? numero : null;
+      return { fila: entrada.fila ?? indice + 2, folioJtrac, idInforme };
+    });
+    const ids = [...new Set(normalizadas.map((fila) => fila.idInforme))].filter(
+      (id): id is number => id !== null,
+    );
+    const foliosConsultar = [...new Set(normalizadas.map((fila) => fila.folioJtrac))].filter(
+      (folio) => folio && Buffer.byteLength(folio, 'utf8') <= 256,
+    );
+    const [catalogoInformes, folios] = await Promise.all([
+      this.informes.obtenerPorIds(ids),
+      this.repositorio.obtenerFoliosExistentes(foliosConsultar),
+    ]);
+    const informes = new Map(catalogoInformes.map((informe) => [informe.skVeo, informe.nombre]));
+    const foliosConDatosValidos = [
+      ...new Set(
+        normalizadas
+          .filter(
+            (fila) =>
+              fila.idInforme !== null &&
+              informes.has(fila.idInforme) &&
+              folios.has(fila.folioJtrac),
+          )
+          .map((fila) => fila.folioJtrac),
+      ),
+    ];
+    const relaciones = new Set(
+      (await this.repositorio.obtenerRelacionesPorFolios(foliosConDatosValidos)).map(
+        (relacion) => `${relacion.folioJtrac}:${relacion.idInforme}`,
+      ),
+    );
+    const pares = new Set<string>();
+    const filas = [];
+    for (const entrada of normalizadas) {
+      const { folioJtrac, idInforme } = entrada;
       const errores: Array<{ campo: string; codigo: string; mensaje: string }> = [];
       const error = (campo: string, mensaje: string) =>
         errores.push({ campo, codigo: 'VALIDACION', mensaje });
       if (!folioJtrac || Buffer.byteLength(folioJtrac, 'utf8') > 256)
         error('folioJtrac', 'Indica un folio JTRAC válido.');
-      else {
-        if (!folios.has(folioJtrac))
-          folios.set(folioJtrac, (await this.repositorio.indicadores(folioJtrac)).existe);
-        if (!folios.get(folioJtrac)) error('folioJtrac', 'El folio JTRAC no existe.');
-      }
+      else if (!folios.has(folioJtrac)) error('folioJtrac', 'El folio JTRAC no existe.');
       if (idInforme === null) error('idInforme', 'Indica un ID de informe válido.');
-      else {
-        if (!informes.has(idInforme))
-          informes.set(idInforme, (await this.informes.obtenerPorSkVeo(idInforme))?.nombre ?? null);
-        if (informes.get(idInforme) === null) error('idInforme', 'El informe no existe.');
-      }
+      else if (!informes.has(idInforme)) error('idInforme', 'El informe no existe.');
       const clave = `${folioJtrac}:${idInforme}`;
       if (pares.has(clave)) error('general', 'La relación está repetida en el archivo.');
       pares.add(clave);
       if (!errores.length && idInforme !== null) {
-        const actual = await this.repositorio.encontrarRelacion({ folioJtrac, idInforme });
-        if (operacion === OperacionCarga.ASIGNACION && actual !== null)
+        const existe = relaciones.has(clave);
+        if (operacion === OperacionCarga.ASIGNACION && existe)
           error('general', 'La relación ya existe.');
-        if (operacion === OperacionCarga.ELIMINACION && actual === null)
+        if (operacion === OperacionCarga.ELIMINACION && !existe)
           error('general', 'La relación no existe.');
       }
       filas.push({
-        fila: entrada.fila ?? indice + 2,
+        fila: entrada.fila,
         folioJtrac,
         idInforme,
         idPosicion: null,

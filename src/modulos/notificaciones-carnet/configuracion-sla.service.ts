@@ -15,6 +15,7 @@ export class ConfiguracionSlaService implements OnModuleInit {
   private informesDisponibles = false;
   private mensajeInicialDisponible = false;
   private mensajeUsuarioDisponible = false;
+  private plazoAnteriorDisponible = false;
   constructor(
     private readonly sql: SqlServerService,
     private readonly configuracion: ConfiguracionService,
@@ -37,12 +38,18 @@ export class ConfiguracionSlaService implements OnModuleInit {
   }
 
   async actualizarEfectiva(): Promise<void> {
-    const columnas = await this.sql.ejecutar<{ inicial: number | null; usuario: number | null }>(
+    const columnas = await this.sql.ejecutar<{
+      inicial: number | null;
+      usuario: number | null;
+      plazoAnterior: number | null;
+    }>(
       `SELECT COL_LENGTH('dbo.CI_CONFIGURACION_SLA', 'mensaje_inicial') AS inicial,
-        COL_LENGTH('dbo.CI_CONFIGURACION_SLA_INFORME', 'mensaje_usuario') AS usuario`,
+        COL_LENGTH('dbo.CI_CONFIGURACION_SLA_INFORME', 'mensaje_usuario') AS usuario,
+        COL_LENGTH('dbo.CI_CONFIGURACION_SLA', 'sla_minutos') AS plazoAnterior`,
     );
     this.mensajeInicialDisponible = !!columnas[0]?.inicial;
     this.mensajeUsuarioDisponible = !!columnas[0]?.usuario;
+    this.plazoAnteriorDisponible = !!columnas[0]?.plazoAnterior;
     const filas = await this.sql.ejecutar<{ existe: number | null }>(
       "SELECT OBJECT_ID('dbo.CI_CONFIGURACION_SLA', 'U') AS existe",
     );
@@ -87,7 +94,6 @@ export class ConfiguracionSlaService implements OnModuleInit {
       ),
     );
     return {
-      slaMinutos: cfg.slaMinutos,
       destinatariosIniciales: cfg.destinatariosIniciales,
       mensajeInicial: cfg.mensajeInicial,
       origenConfiguracion: this.origen,
@@ -162,14 +168,14 @@ export class ConfiguracionSlaService implements OnModuleInit {
     await this.sql.ejecutarEnTransaccion(async (ejecutar) => {
       await ejecutar(
         `UPDATE dbo.CI_CONFIGURACION_SLA WITH (UPDLOCK, HOLDLOCK)
-        SET sla_minutos = COALESCE(@minutos, sla_minutos), correos_iniciales = @correos,
+        SET correos_iniciales = @correos,
             usuario_actualizacion = @usuario, fecha_actualizacion = GETDATE()
         WHERE id_configuracion = 1;
         IF @@ROWCOUNT = 0
           INSERT INTO dbo.CI_CONFIGURACION_SLA
-            (id_configuracion, sla_minutos, correos_iniciales, usuario_actualizacion, fecha_actualizacion)
-          VALUES (1, COALESCE(@minutos, 1440), @correos, @usuario, GETDATE());`,
-        { minutos: dto.slaMinutos ?? null, correos: correos.join(','), usuario },
+            (id_configuracion, ${this.plazoAnteriorDisponible ? 'sla_minutos,' : ''} correos_iniciales, usuario_actualizacion, fecha_actualizacion)
+          VALUES (1, ${this.plazoAnteriorDisponible ? '1440,' : ''} @correos, @usuario, GETDATE());`,
+        { correos: correos.join(','), usuario },
       );
       if (this.mensajeInicialDisponible && dto.mensajeInicial !== undefined) {
         await ejecutar(
@@ -182,21 +188,31 @@ export class ConfiguracionSlaService implements OnModuleInit {
     return { exitoso: true };
   }
 
+  async eliminarInforme(idInforme: number) {
+    if (!Number.isInteger(idInforme) || idInforme < 1 || idInforme > 2147483647) {
+      throw new ExcepcionNegocio(CodigosError.VALIDACION, 'El ID de informe no es válido.');
+    }
+    await this.sql.ejecutar(
+      'DELETE FROM dbo.CI_CONFIGURACION_SLA_INFORME WHERE id_informe=@idInforme',
+      { idInforme },
+    );
+    await this.actualizarEfectiva();
+    return { exitoso: true };
+  }
+
   private async cargar(): Promise<void> {
     const filas = await this.sql.ejecutar<{
-      sla_minutos: number;
       correos_iniciales: string;
       mensaje_inicial: string | null;
     }>(
       this.mensajeInicialDisponible
-        ? 'SELECT sla_minutos, correos_iniciales, mensaje_inicial FROM dbo.CI_CONFIGURACION_SLA WHERE id_configuracion = 1'
-        : 'SELECT sla_minutos, correos_iniciales, NULL AS mensaje_inicial FROM dbo.CI_CONFIGURACION_SLA WHERE id_configuracion = 1',
+        ? 'SELECT correos_iniciales, mensaje_inicial FROM dbo.CI_CONFIGURACION_SLA WHERE id_configuracion = 1'
+        : 'SELECT correos_iniciales, NULL AS mensaje_inicial FROM dbo.CI_CONFIGURACION_SLA WHERE id_configuracion = 1',
     );
     const fila = filas[0];
     this.configuracion.establecerSlaGuardado(
       fila
         ? {
-            slaMinutos: fila.sla_minutos,
             mensajeInicial: fila.mensaje_inicial ?? null,
             destinatariosIniciales: fila.correos_iniciales
               .split(',')

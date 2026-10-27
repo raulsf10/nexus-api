@@ -2,7 +2,7 @@ export interface DatosPlantillaCarnet {
   tipo: 'asignacion' | 'eliminacion' | 'frecuencia' | 'aviso-inicial';
   idPosicion: number;
   usuarioAsignado: string | null;
-  correoAsignado: string | null;
+  numeroEmpleado: string | null;
   mensajeInicial?: string | null;
   informes: Array<{
     idInforme: number;

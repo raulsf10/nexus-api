@@ -57,7 +57,6 @@ export interface ReglaSlaInforme {
 export interface ConfiguracionCorreoNotificacionesSeccion {
   reglasSla: ReglaSlaInforme[];
   escalonadosActivos: boolean;
-  slaMinutos: number;
   destinatariosIniciales: string[];
   mensajeInicial: string | null;
   informesSla: number[];

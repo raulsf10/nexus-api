@@ -291,12 +291,14 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
       informes = visibles;
       if (!informes.length) return false;
     }
-    const [asignaciones, usuarioAsignado, correoAsignado] = await Promise.all([
+    const [asignaciones, usuarioAsignado, numeroEmpleado] = await Promise.all([
       grupo.tipo === 'eliminacion'
         ? Promise.resolve([])
         : this.informes.obtenerListadoPorUsuario(grupo.idPosicion),
       this.repositorio.usuarioPorPosicion(grupo.idPosicion),
-      this.repositorio.obtenerCorreoPorPosicion(grupo.idPosicion),
+      previo
+        ? this.repositorio.obtenerNumeroEmpleadoPorPosicion(grupo.idPosicion)
+        : Promise.resolve(null),
     ]);
     const porInforme = new Map(asignaciones.map((asignacion) => [asignacion.fkVeo, asignacion]));
     const mensajes = new Map(cfg.reglasSla.map((regla) => [regla.idInforme, regla.mensajeUsuario]));
@@ -304,7 +306,7 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
       tipo: previo ? 'aviso-inicial' : grupo.tipo,
       idPosicion: grupo.idPosicion,
       usuarioAsignado,
-      correoAsignado,
+      numeroEmpleado,
       mensajeInicial: previo ? cfg.mensajeInicial : null,
       informes: informes.map((informe) => {
         const asignacion = porInforme.get(informe.idInforme);

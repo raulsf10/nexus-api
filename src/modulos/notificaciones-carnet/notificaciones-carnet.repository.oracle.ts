@@ -14,6 +14,16 @@ export class NotificacionesCarnetRepositoryOracle {
     return filas[0]?.USUARIO ?? null;
   }
 
+  async obtenerNumeroEmpleadoPorPosicion(idPosicion: number): Promise<string | null> {
+    const filas = await this.oracle.ejecutar<{ NUMERO_EMPLEADO: string | number | null }>(
+      `SELECT MIN(num_empleado) AS numero_empleado
+       FROM dwh_suka.stg_rh_posisiones_activas WHERE idobj = :idPosicion`,
+      { idPosicion },
+    );
+    const numero = filas[0]?.NUMERO_EMPLEADO;
+    return numero == null ? null : String(numero).trim() || null;
+  }
+
   async destinatariosInforme(idInforme: number) {
     return this.oracle.ejecutar<{
       ID_POSICION: number;

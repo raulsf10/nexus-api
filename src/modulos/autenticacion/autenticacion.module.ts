@@ -12,6 +12,7 @@ import { RequiereModuloGuard } from './guardias/requiere-modulo.guard';
 import { LdapService } from './ldap.service';
 import { PermisosController } from './permisos.controller';
 import { PermisosService } from './permisos.service';
+import { PermisosPosicionRepository } from './permisos-posicion.repository';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { PermisosService } from './permisos.service';
   ],
   controllers: [AutenticacionController, PermisosController],
   providers: [
+    PermisosPosicionRepository,
     PermisosService,
     AutenticacionService,
     AutenticacionRepository,
@@ -42,6 +44,6 @@ import { PermisosService } from './permisos.service';
     JwtGuard,
     RequiereModuloGuard,
   ],
-  exports: [JwtModule, JwtGuard, RequiereModuloGuard],
+  exports: [JwtModule, JwtGuard, RequiereModuloGuard, PermisosPosicionRepository],
 })
 export class AutenticacionModule {}

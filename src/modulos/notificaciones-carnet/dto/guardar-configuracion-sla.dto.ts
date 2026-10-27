@@ -18,7 +18,8 @@ export class GuardarConfiguracionSlaDto {
     minimum: 1,
     maximum: 525600,
     example: 1440,
-    description: 'Valor inicial al agregar un informe; no modifica plazos de informes ni avisos.',
+    deprecated: true,
+    description: 'Campo anterior ignorado. El plazo se configura exclusivamente por informe.',
   })
   @IsOptional()
   @IsInt()

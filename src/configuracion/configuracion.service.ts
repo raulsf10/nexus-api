@@ -15,7 +15,6 @@ import {
 @Injectable()
 export class ConfiguracionService {
   private slaGuardado?: {
-    slaMinutos: number;
     destinatariosIniciales: string[];
     mensajeInicial?: string | null;
   };
@@ -26,7 +25,6 @@ export class ConfiguracionService {
   }
 
   establecerSlaGuardado(valor?: {
-    slaMinutos: number;
     destinatariosIniciales: string[];
     mensajeInicial?: string | null;
   }): void {
@@ -97,7 +95,6 @@ export class ConfiguracionService {
   }
 
   obtenerCorreoNotificaciones(): ConfiguracionCorreoNotificacionesSeccion {
-    const slaMinutos = this.slaGuardado?.slaMinutos ?? 1440;
     const reglas = this.reglasSlaGuardadas.map((regla) => ({ ...regla }));
     const destinatariosDefault = (
       this.configService.get<string>('ALERTA_DESTINATARIOS_DEFAULT') ?? ''
@@ -109,7 +106,6 @@ export class ConfiguracionService {
       usarCorreoPosicion: this.configService.get<boolean>('CARNET_USAR_CORREO_POSICION') ?? false,
       escalonadosActivos:
         this.configService.get<boolean>('CARNET_AVISOS_ESCALONADOS_ACTIVOS') ?? false,
-      slaMinutos,
       mensajeInicial: this.slaGuardado?.mensajeInicial ?? null,
       destinatariosIniciales:
         this.slaGuardado?.destinatariosIniciales ??

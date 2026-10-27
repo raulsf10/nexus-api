@@ -10,6 +10,10 @@ const LONGITUD_MINIMA_BUSQUEDA = 2;
 export class UsuariosService {
   constructor(private readonly repositorio: UsuariosRepository) {}
 
+  filtrosPlantilla() {
+    return this.repositorio.filtrosPlantilla();
+  }
+
   async buscar(texto: string): Promise<UsuarioListadoEntidad[]> {
     const limpio = (texto ?? '').trim();
     if (limpio.length < LONGITUD_MINIMA_BUSQUEDA) {

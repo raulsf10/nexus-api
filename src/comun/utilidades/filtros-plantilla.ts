@@ -7,8 +7,8 @@ export function filtrosPlantilla(filtros: FiltrosPlantillaDto) {
     const valor = filtros[campo]?.trim();
     if (!valor) continue;
     const columna = campo === 'empresa' ? 'pa.direccion' : 'pa.area';
-    condiciones.push(`UPPER(${columna}) LIKE :${campo} ESCAPE '\\'`);
-    parametros[campo] = `%${valor.toUpperCase().replace(/[\\%_]/g, '\\$&')}%`;
+    condiciones.push(`UPPER(TRIM(${columna})) = :${campo}`);
+    parametros[campo] = valor.toUpperCase();
   }
   if (filtros.numeroEmpleado) {
     condiciones.push('TO_CHAR(pa.num_empleado) = :numeroEmpleado');

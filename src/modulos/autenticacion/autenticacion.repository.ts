@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { OracleService } from '../../base-datos/oracle/oracle.service';
 import { LoggerService } from '../../comun/logger/logger.service';
+import { PermisosPosicionRepository } from './permisos-posicion.repository';
 
 interface FilaModulo {
   MODULO: string;
@@ -11,9 +12,24 @@ export class AutenticacionRepository {
   constructor(
     private readonly oracle: OracleService,
     private readonly logger: LoggerService,
+    private readonly posiciones: PermisosPosicionRepository,
   ) {}
 
   async obtenerModulosPorUsuario(usuario: string): Promise<string[]> {
+    const directos = await this.obtenerModulosDirectos(usuario);
+    try {
+      const heredados = await this.posiciones.obtenerPorUsuario(usuario);
+      return [...new Set([...directos, ...heredados.map((permiso) => permiso.modulo)])];
+    } catch {
+      this.logger.advertencia(
+        'No se pudieron consultar permisos por posición; solo se reconocen los permisos individuales.',
+        { usuario },
+      );
+      return directos;
+    }
+  }
+
+  async obtenerModulosDirectos(usuario: string): Promise<string[]> {
     const sql = `
       SELECT modulo
       FROM   dwh_suka.dim_ci_admin

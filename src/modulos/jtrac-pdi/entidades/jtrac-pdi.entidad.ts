@@ -23,6 +23,7 @@ export interface FilaReporteJtracPdi {
   idRelacion: number | null;
   folioJtrac: string | null;
   indicador: string | null;
+  estatusJtrac: string | null;
   fechaRelacion: string | null;
   usuarioRelacion: string | null;
 }

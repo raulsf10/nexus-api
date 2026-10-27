@@ -6,6 +6,7 @@ import { ConfiguracionService } from '../../configuracion/configuracion.service'
 import { OperacionCarga } from '../carga-masiva/enums/operacion-carga.enum';
 import { NotificacionesCarnetService } from '../notificaciones-carnet/notificaciones-carnet.service';
 import { MODULO_SEGUIMIENTO_SOLICITUDES_CARNET } from './solicitudes-carnet.constantes';
+import { PermisosPosicionRepository } from '../autenticacion/permisos-posicion.repository';
 
 type EventoSolicitud =
   | 'creada'
@@ -38,6 +39,7 @@ export class NotificacionesSolicitudesService {
     private readonly correo: NotificacionesCarnetService,
     private readonly configuracion: ConfiguracionService,
     private readonly logger: LoggerService,
+    private readonly posiciones: PermisosPosicionRepository,
   ) {}
 
   // Se invoca después del commit: un fallo SMTP no debe repetir los movimientos.
@@ -112,8 +114,8 @@ export class NotificacionesSolicitudesService {
     }
   }
 
-  private obtenerCorreos(revisores: boolean, usuario: string): Promise<CorreoUsuario[]> {
-    return this.oracle.ejecutar<CorreoUsuario>(
+  private async obtenerCorreos(revisores: boolean, usuario: string): Promise<CorreoUsuario[]> {
+    const correos = await this.oracle.ejecutar<CorreoUsuario>(
       `SELECT DISTINCT a.usuario, c.correo
        FROM (
          ${
@@ -128,6 +130,33 @@ export class NotificacionesSolicitudesService {
          ON TRIM(c.posicion) = TO_CHAR(w.fk_empleado)`,
       revisores ? { modulo: MODULO_SEGUIMIENTO_SOLICITUDES_CARNET } : { usuario },
     );
+    if (!revisores) return correos;
+    const ids = [
+      ...new Set(
+        (await this.posiciones.obtenerTodos())
+          .filter((permiso) => permiso.modulo === MODULO_SEGUIMIENTO_SOLICITUDES_CARNET)
+          .map((permiso) => Number(permiso.idPosicion)),
+      ),
+    ];
+    for (let inicio = 0; inicio < ids.length; inicio += 500) {
+      const parametros = Object.fromEntries(
+        ids.slice(inicio, inicio + 500).map((id, indice) => [`posicion${indice}`, id]),
+      );
+      correos.push(
+        ...(await this.oracle.ejecutar<CorreoUsuario>(
+          `SELECT DISTINCT LOWER(TRIM(w.sk_usuario_win)) usuario, c.correo
+         FROM dwh_suka.dim_hk_usuarios_windows w
+         LEFT JOIN dwh_suka.stg_rh_vw_ctl_plantillacorreo c ON TRIM(c.posicion)=TO_CHAR(w.fk_empleado)
+         WHERE w.fk_empleado IN (${Object.keys(parametros)
+           .map((clave) => `:${clave}`)
+           .join(',')})
+         AND TRIM(w.sk_usuario_win) IS NOT NULL
+         AND EXISTS (SELECT 1 FROM dwh_suka.stg_rh_posisiones_activas p WHERE p.idobj=w.fk_empleado)`,
+          parametros,
+        )),
+      );
+    }
+    return correos;
   }
 
   private escaparHtml(texto: string): string {

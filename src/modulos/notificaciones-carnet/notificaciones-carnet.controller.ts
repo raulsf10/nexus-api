@@ -58,8 +58,6 @@ export class NotificacionesCarnetController {
       usarCorreoPosicion: cfg.usarCorreoPosicion,
       zonaHoraria: cfg.zonaHoraria,
       origenConfiguracion: this.configuracionSla.obtenerOrigen(),
-      slaMinutos: cfg.slaMinutos,
-      slaHoras: cfg.slaMinutos / 60,
       destinatarioForzado: cfg.destinatarioForzado,
       destinatariosIniciales: cfg.destinatariosIniciales,
       informesSla: cfg.informesSla,
@@ -70,12 +68,12 @@ export class NotificacionesCarnetController {
   @Put('reglas')
   @ApiOperation({
     deprecated: true,
-    summary: 'Usar PUT /configuracion-sla para destinatarios y plazo.',
+    summary: 'Usar el módulo Configuración SLA para destinatarios e informes.',
   })
   guardar(): never {
     throw new ExcepcionNegocio(
       CodigosError.VALIDACION,
-      'Configura destinatarios y plazo en Configuración SLA. Los IDs de informes se conservan en el .env.',
+      'Configura destinatarios y plazos por informe en Configuración SLA.',
       409,
     );
   }

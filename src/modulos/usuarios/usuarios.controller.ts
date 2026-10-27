@@ -9,6 +9,12 @@ import { UsuariosService } from './usuarios.service';
 export class UsuariosController {
   constructor(private readonly servicio: UsuariosService) {}
 
+  @Get('filtros-plantilla')
+  @ApiOperation({ summary: 'Empresas y direcciones de la plantilla para los filtros.' })
+  filtrosPlantilla() {
+    return this.servicio.filtrosPlantilla();
+  }
+
   @Get('buscar')
   @ApiOperation({ summary: 'Busca usuarios por texto en descripción (mín. 2 caracteres).' })
   buscar(@Query('texto') texto?: string): Promise<UsuarioListadoEntidad[]> {
@@ -17,9 +23,7 @@ export class UsuariosController {
 
   @Get(':skEmpleado')
   @ApiOperation({ summary: 'Obtiene un usuario por su sk_empleado.' })
-  obtener(
-    @Param('skEmpleado', ParseIntPipe) skEmpleado: number,
-  ): Promise<UsuarioListadoEntidad> {
+  obtener(@Param('skEmpleado', ParseIntPipe) skEmpleado: number): Promise<UsuarioListadoEntidad> {
     return this.servicio.obtenerPorSkEmpleado(skEmpleado);
   }
 }

@@ -8,6 +8,16 @@ type FilaUsuario = Record<string, unknown>;
 export class UsuariosRepository {
   constructor(private readonly oracle: OracleService) {}
 
+  async filtrosPlantilla(): Promise<Array<{ empresa: string | null; direccion: string | null }>> {
+    const filas = await this.oracle.ejecutar<{ EMPRESA: string | null; DIRECCION: string | null }>(
+      `SELECT DISTINCT TRIM(direccion) empresa, TRIM(area) direccion
+       FROM dwh_suka.stg_rh_posisiones_activas
+       WHERE TRIM(direccion) IS NOT NULL OR TRIM(area) IS NOT NULL
+       ORDER BY empresa, direccion`,
+    );
+    return filas.map((fila) => ({ empresa: fila.EMPRESA, direccion: fila.DIRECCION }));
+  }
+
   async buscarPorTexto(texto: string): Promise<UsuarioListadoEntidad[]> {
     const sql = `
       SELECT * FROM (

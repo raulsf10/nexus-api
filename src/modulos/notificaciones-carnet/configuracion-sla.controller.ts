@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RequiereModulo } from '../../comun/decoradores/requiere-modulo.decorator';
 import { UsuarioActual } from '../../comun/decoradores/usuario-actual.decorator';
@@ -31,5 +31,10 @@ export class ConfiguracionSlaController {
     @UsuarioActual() usuario: UsuarioJwtInterface,
   ) {
     return this.servicio.guardarInforme(idInforme, dto, usuario.usuario);
+  }
+
+  @Delete('informes/:idInforme')
+  eliminarInforme(@Param('idInforme', ParseIntPipe) idInforme: number) {
+    return this.servicio.eliminarInforme(idInforme);
   }
 }

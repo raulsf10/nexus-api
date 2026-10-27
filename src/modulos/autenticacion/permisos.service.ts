@@ -6,12 +6,14 @@ import { AutenticacionRepository } from './autenticacion.repository';
 import { GuardarPermisosDto } from './dto/guardar-permisos.dto';
 import { MODULO_ADMINISTRAR_PERMISOS, MODULOS_ADMINISTRABLES } from './permisos.constantes';
 import { ConsultarUsuariosPermisosDto } from './dto/consultar-usuarios-permisos.dto';
+import { PermisosPosicionRepository } from './permisos-posicion.repository';
 
 @Injectable()
 export class PermisosService {
   constructor(
     private readonly oracle: OracleService,
     private readonly autenticacion: AutenticacionRepository,
+    private readonly posiciones: PermisosPosicionRepository,
   ) {}
 
   async listarUsuarios(dto: ConsultarUsuariosPermisosDto) {
@@ -59,16 +61,18 @@ export class PermisosService {
   }
 
   async consultar(usuario: string) {
-    const modulos = await this.autenticacion.obtenerModulosPorUsuario(usuario);
+    const modulos = await this.autenticacion.obtenerModulosDirectos(usuario);
     await this.validarUsuario(usuario, modulos);
-    return { usuario, modulos, catalogo: MODULOS_ADMINISTRABLES };
+    const heredados = await this.posiciones.obtenerPorUsuario(usuario);
+    return { usuario, modulos, heredados, catalogo: MODULOS_ADMINISTRABLES };
   }
 
   async guardar(dto: GuardarPermisosDto, actor: string) {
-    const actuales = await this.autenticacion.obtenerModulosPorUsuario(dto.usuario);
+    const actuales = await this.autenticacion.obtenerModulosDirectos(dto.usuario);
     await this.validarUsuario(dto.usuario, actuales);
     if (
       actor.toLowerCase() === dto.usuario.toLowerCase() &&
+      actuales.includes(MODULO_ADMINISTRAR_PERMISOS) &&
       !dto.modulos.includes(MODULO_ADMINISTRAR_PERMISOS)
     ) {
       throw new ExcepcionNegocio(
@@ -79,12 +83,8 @@ export class PermisosService {
     await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
       // Serializa altas/bajas con otros administradores sin borrar permisos del sistema anterior.
       await ejecutor.ejecutar('LOCK TABLE dwh_suka.dim_ci_admin IN EXCLUSIVE MODE');
-      const autorizados = await ejecutor.ejecutar(
-        `SELECT usuario FROM dwh_suka.dim_ci_admin
-        WHERE LOWER(usuario) = LOWER(:actor) AND modulo = :modulo`,
-        { actor, modulo: MODULO_ADMINISTRAR_PERMISOS },
-      );
-      if (!autorizados.length)
+      const autorizados = await this.autenticacion.obtenerModulosPorUsuario(actor);
+      if (!autorizados.includes(MODULO_ADMINISTRAR_PERMISOS))
         throw new ExcepcionNegocio(
           CodigosError.NO_AUTORIZADO,
           'Ya no tienes permiso para administrar usuarios.',
@@ -107,11 +107,65 @@ export class PermisosService {
         }
       }
     });
+    return this.consultar(dto.usuario);
+  }
+
+  listarPosiciones(dto: ConsultarUsuariosPermisosDto) {
+    return this.posiciones.listar(dto.pagina, dto.tamanioPagina);
+  }
+
+  async consultarPosicion(idPosicion: number) {
+    this.validarIdPosicion(idPosicion);
+    const posicion = await this.posiciones.obtenerPosicion(idPosicion);
+    if (!posicion)
+      throw new ExcepcionNegocio(CodigosError.VALIDACION, 'La posición no existe.', 404);
+    const permisos = await this.posiciones.obtenerTodos();
     return {
-      usuario: dto.usuario,
-      modulos: await this.autenticacion.obtenerModulosPorUsuario(dto.usuario),
+      ...posicion,
+      usuario: String(idPosicion),
+      modulos: permisos
+        .filter((permiso) => Number(permiso.idPosicion) === idPosicion)
+        .map((permiso) => permiso.modulo),
       catalogo: MODULOS_ADMINISTRABLES,
     };
+  }
+
+  async guardarPosicion(idPosicion: number, modulos: string[], actor: string) {
+    await this.consultarPosicion(idPosicion);
+    await this.posiciones.guardar(idPosicion, modulos, actor, async (actuales) => {
+      const directos = await this.autenticacion.obtenerModulosDirectos(actor);
+      const posicionesActor = new Set(await this.posiciones.posicionesUsuario(actor));
+      const tieneAdminIndividual = directos.includes(MODULO_ADMINISTRAR_PERMISOS);
+      const admins = actuales.filter(
+        (permiso) =>
+          permiso.modulo === MODULO_ADMINISTRAR_PERMISOS &&
+          posicionesActor.has(Number(permiso.idPosicion)),
+      );
+      if (!tieneAdminIndividual && !admins.length) {
+        throw new ExcepcionNegocio(
+          CodigosError.NO_AUTORIZADO,
+          'Ya no tienes permiso para administrar accesos.',
+          403,
+        );
+      }
+      if (
+        !tieneAdminIndividual &&
+        !admins.some((permiso) => Number(permiso.idPosicion) !== idPosicion) &&
+        !modulos.includes(MODULO_ADMINISTRAR_PERMISOS)
+      ) {
+        throw new ExcepcionNegocio(
+          CodigosError.VALIDACION,
+          'No puedes quitarte el último permiso para administrar accesos.',
+        );
+      }
+    });
+    return this.consultarPosicion(idPosicion);
+  }
+
+  private validarIdPosicion(idPosicion: number): void {
+    if (!Number.isSafeInteger(idPosicion) || idPosicion < 1 || idPosicion > 9999999999) {
+      throw new ExcepcionNegocio(CodigosError.VALIDACION, 'El ID de posición no es válido.');
+    }
   }
 
   private async validarUsuario(usuario: string, modulos: string[]): Promise<void> {

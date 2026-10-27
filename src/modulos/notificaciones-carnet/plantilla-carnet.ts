@@ -124,7 +124,7 @@ function seccionInformes(datos: DatosPlantillaCarnet, mensaje: string | null): S
           : `Se le asignaron las herramientas ${nombres} al colaborador:`,
         `Colaborador: ${valorDisponible(datos.usuarioAsignado)}`,
         `Posición: ${datos.idPosicion}`,
-        `Correo: ${valorDisponible(datos.correoAsignado)}`,
+        `# de Empleado: ${valorDisponible(datos.numeroEmpleado)}`,
       ]
     : [
         baja
