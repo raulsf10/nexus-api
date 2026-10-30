@@ -5,6 +5,7 @@ import { LoggerService } from '../../comun/logger/logger.service';
 import { ConfiguracionService } from '../../configuracion/configuracion.service';
 import { OperacionCarga } from '../carga-masiva/enums/operacion-carga.enum';
 import { NotificacionesCarnetService } from '../notificaciones-carnet/notificaciones-carnet.service';
+import { ExcepcionesNotificacionesService } from '../notificaciones-carnet/excepciones-notificaciones.service';
 import { MODULO_SEGUIMIENTO_SOLICITUDES_CARNET } from './solicitudes-carnet.constantes';
 import { PermisosPosicionRepository } from '../autenticacion/permisos-posicion.repository';
 
@@ -17,6 +18,7 @@ type EventoSolicitud =
   | 'rechazada';
 
 export interface AvisoSolicitud {
+  filas: Array<{ idInforme: number; aprobada?: boolean }>;
   evento: EventoSolicitud;
   idSolicitud: number;
   usuarioSolicitante: string;
@@ -40,11 +42,24 @@ export class NotificacionesSolicitudesService {
     private readonly configuracion: ConfiguracionService,
     private readonly logger: LoggerService,
     private readonly posiciones: PermisosPosicionRepository,
+    private readonly excepciones: ExcepcionesNotificacionesService,
   ) {}
 
   // Se invoca después del commit: un fallo SMTP no debe repetir los movimientos.
   async notificar(datos: AvisoSolicitud): Promise<string | undefined> {
     try {
+      const permitidos = new Set(
+        await this.excepciones.permitidos(datos.filas.map((fila) => fila.idInforme)),
+      );
+      const filas = datos.filas.filter((fila) => permitidos.has(fila.idInforme));
+      if (!filas.length) return undefined;
+      if (datos.aprobadas !== undefined) {
+        datos = {
+          ...datos,
+          aprobadas: filas.filter((fila) => fila.aprobada).length,
+          noAprobadas: filas.filter((fila) => !fila.aprobada).length,
+        };
+      }
       const forzado = this.configuracion.obtenerCorreoNotificaciones().destinatarioForzado;
       const revisores = ['creada', 'reabierta', 'nueva-version'].includes(datos.evento);
       const usuarios = forzado
@@ -94,7 +109,9 @@ export class NotificacionesSolicitudesService {
         <div style="padding:24px"><h2>${this.escaparHtml(asunto)}</h2>
         ${lineas.map((linea) => `<p>${this.escaparHtml(linea).replace(/\r?\n/g, '<br>')}</p>`).join('')}
         </div></div>`;
-      await this.correo.enviarNotificacion([...destinatarios], asunto, texto, html);
+      await this.correo.enviarNotificacion([...destinatarios], asunto, texto, html, [
+        ...permitidos,
+      ]);
       if (sinCorreo.length) {
         this.logger.advertencia('Solicitud notificada con usuarios sin correo válido.', {
           idSolicitud: datos.idSolicitud,

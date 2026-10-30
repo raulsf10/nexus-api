@@ -154,11 +154,12 @@ export class HistorialCarnetRepository {
   private mapear(r: FilaSql): HistorialCarnetEntidad {
     const fechaSolicitud = r['fecha_solicitud'] ? String(r['fecha_solicitud']) : null;
     const fechaAtencion = r['fecha_atencion'] ? String(r['fecha_atencion']) : null;
+    const fecha = String(r['fecha_txt'] ?? '');
     return {
       idSolicitud: r['id_solicitud'] ? Number(r['id_solicitud']) : null,
       fechaSolicitud,
       fechaAtencion,
-      slaMinutosHabiles: minutosHabilesEntre(fechaSolicitud, fechaAtencion),
+      slaMinutosHabiles: minutosHabilesEntre(fechaSolicitud, fecha),
       idHistorial: Number(r['id_historial']),
       usuario: String(r['usuario'] ?? '').trim(),
       accion: String(r['accion'] ?? '') as AccionHistorial,
@@ -168,7 +169,7 @@ export class HistorialCarnetRepository {
       nombreInforme: r['nombre_informe'] ? String(r['nombre_informe']).trim() : null,
       frecuencia: r['frecuencia'] ? String(r['frecuencia']).trim() : null,
       origen: String(r['origen'] ?? '') as OrigenHistorial,
-      fecha: String(r['fecha_txt'] ?? ''),
+      fecha,
     };
   }
 }

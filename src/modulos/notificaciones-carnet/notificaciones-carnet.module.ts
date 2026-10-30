@@ -11,11 +11,18 @@ import { HistorialCarnetModule } from '../historial-carnet/historial-carnet.modu
 import { CorreosPersonalizadosService } from './correos-personalizados.service';
 import { ConfiguracionSlaService } from './configuracion-sla.service';
 import { ConfiguracionSlaController } from './configuracion-sla.controller';
+import { ExcepcionesNotificacionesService } from './excepciones-notificaciones.service';
+import { ExcepcionesNotificacionesController } from './excepciones-notificaciones.controller';
 
 @Module({
   imports: [InformesModule, HistorialCarnetModule],
-  controllers: [NotificacionesCarnetController, ConfiguracionSlaController],
+  controllers: [
+    NotificacionesCarnetController,
+    ConfiguracionSlaController,
+    ExcepcionesNotificacionesController,
+  ],
   providers: [
+    ExcepcionesNotificacionesService,
     ConfiguracionSlaService,
     CorreosPersonalizadosService,
     NotificacionesCarnetService,
@@ -25,6 +32,6 @@ import { ConfiguracionSlaController } from './configuracion-sla.controller';
     CarnetRepositoryOracle,
     CarnetRepositorySqlServer,
   ],
-  exports: [NotificacionesCarnetService, SlaCarnetService],
+  exports: [NotificacionesCarnetService, SlaCarnetService, ExcepcionesNotificacionesService],
 })
 export class NotificacionesCarnetModule {}

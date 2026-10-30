@@ -208,10 +208,14 @@ export class NotificacionesProgramadasRepository {
     const filas = await this.sql.ejecutar<AvisoProgramadoCarnet>(
       `
       ;WITH siguiente AS (
-        SELECT TOP (1) * FROM dbo.CI_CARNET_AVISO WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
+        SELECT TOP (1) * FROM dbo.CI_CARNET_AVISO a WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
         WHERE estado IN ('INICIAL','USUARIO','INICIAL_SLA','USUARIO_SLA','ACTIVACION')
-          AND proximoIntento<=SYSUTCDATETIME()
-          AND (estado IN ('INICIAL','INICIAL_SLA') OR fechaProgramada<=SYSUTCDATETIME())
+          AND ((proximoIntento<=SYSUTCDATETIME()
+                AND (estado IN ('INICIAL','INICIAL_SLA') OR fechaProgramada<=SYSUTCDATETIME()))
+            OR ((ultimoError IS NULL OR proximoIntento<=SYSUTCDATETIME()) AND EXISTS (
+              SELECT 1 FROM dbo.CI_CARNET_AVISO_INFORME d
+              JOIN dbo.CI_CARNET_EXCEPCION_CORREO e ON e.id_informe=d.idInforme
+              WHERE d.idAviso=a.idAviso AND d.cancelado=0)))
           AND (bloqueoHasta IS NULL OR bloqueoHasta<SYSUTCDATETIME())
         ORDER BY proximoIntento,fechaCreacion
       )
@@ -235,13 +239,22 @@ export class NotificacionesProgramadasRepository {
     );
   }
 
-  async detalleVigente(aviso: AvisoProgramadoCarnet, idInforme: number): Promise<boolean> {
+  async detalleVigente(
+    aviso: AvisoProgramadoCarnet,
+    idInforme: number,
+    porExcepcion = false,
+  ): Promise<boolean> {
     const filas = await this.sql.ejecutar(
       `SELECT d.idInforme FROM dbo.CI_CARNET_AVISO_INFORME d
       INNER JOIN dbo.CI_CARNET_AVISO a ON a.idAviso=d.idAviso
-      WHERE a.idAviso=@idAviso AND a.bloqueo=@bloqueo AND a.estado='ACTIVACION'
+      WHERE a.idAviso=@idAviso AND a.bloqueo=@bloqueo AND a.estado=@estado
         AND d.idInforme=@idInforme AND d.cancelado=0`,
-      { idAviso: aviso.idAviso, bloqueo: aviso.bloqueo, idInforme },
+      {
+        idAviso: aviso.idAviso,
+        bloqueo: aviso.bloqueo,
+        idInforme,
+        estado: porExcepcion ? aviso.estado : 'ACTIVACION',
+      },
     );
     return filas.length === 1;
   }
@@ -255,6 +268,14 @@ export class NotificacionesProgramadasRepository {
       { idAviso: aviso.idAviso, bloqueo: aviso.bloqueo },
     );
     return filas.length === 1;
+  }
+
+  async liberarBloqueo(aviso: AvisoProgramadoCarnet): Promise<void> {
+    await this.sql.ejecutar(
+      `UPDATE dbo.CI_CARNET_AVISO SET bloqueo=NULL,bloqueoHasta=NULL
+       WHERE idAviso=@idAviso AND bloqueo=@bloqueo`,
+      { idAviso: aviso.idAviso, bloqueo: aviso.bloqueo },
+    );
   }
 
   async cancelarInformes(idAviso: string, idInformes: number[]): Promise<void> {

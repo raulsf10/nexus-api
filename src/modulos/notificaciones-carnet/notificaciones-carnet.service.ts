@@ -18,6 +18,7 @@ import { ServiceUnavailableException } from '@nestjs/common';
 import { asuntoCarnet, htmlCarnet, textoCarnet } from './plantilla-carnet';
 import { DatosPlantillaCarnet } from './interfaces/datos-plantilla-carnet.interface';
 import { ConfiguracionSlaService } from './configuracion-sla.service';
+import { ExcepcionesNotificacionesService } from './excepciones-notificaciones.service';
 
 interface GrupoCambioCorreo {
   idPosicion: number;
@@ -44,6 +45,7 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     private readonly programadas: NotificacionesProgramadasRepository,
     private readonly sla: SlaCarnetService,
     private readonly configuracionSla: ConfiguracionSlaService,
+    private readonly excepciones: ExcepcionesNotificacionesService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -105,7 +107,9 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     asunto: string,
     contenido: string,
     informe: string,
+    idInforme: number,
   ): Promise<string[]> {
+    await this.excepciones.exigirPermitido(idInforme);
     this.exigirSmtpPersonalizado();
     const cfg = this.configuracion.obtenerCorreoNotificaciones();
     const resultado = await this.transporte!.sendMail({
@@ -130,7 +134,9 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     asunto: string,
     texto: string,
     html: string,
+    idInformes: number[],
   ): Promise<void> {
+    if (!(await this.excepciones.permitidos(idInformes)).length) return;
     this.exigirSmtpPersonalizado();
     const cfg = this.configuracion.obtenerCorreoNotificaciones();
     const correos = this.validarDestinatarios(
@@ -164,6 +170,16 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     cfg = this.configuracion.obtenerCorreoNotificaciones(),
   ): Promise<void> {
     if (cambios.length === 0) return;
+    try {
+      const excluidos = await this.excepciones.obtenerIds();
+      cambios = cambios.filter((cambio) => !excluidos.has(cambio.idInforme));
+    } catch {
+      this.logger.advertencia(
+        'Avisos omitidos: no se pudieron verificar las excepciones de notificaciones.',
+      );
+      return;
+    }
+    if (!cambios.length) return;
 
     if (cfg.escalonadosActivos && cambios.some((cambio) => cambio.tipo === 'asignacion')) {
       try {
@@ -237,6 +253,10 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
     destinatarios: string[],
     aviso?: AvisoProgramadoCarnet,
   ): Promise<boolean> {
+    if (aviso) await this.sla.liberarExcluidos(aviso);
+    const permitidos = await this.excepciones.permitidos(grupo.idInformes);
+    if (!permitidos.length) return false;
+    grupo = { ...grupo, idInformes: permitidos };
     if (!this.transporte) throw new Error('SMTP no disponible.');
     const cfg = this.configuracion.obtenerCorreoNotificaciones();
     // También cubre avisos que ya tenían otros destinatarios guardados en la cola.
@@ -322,6 +342,13 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
         };
       }),
     };
+    // Revalidar después de resolver datos; la excepción puede haberse registrado durante la consulta.
+    if (aviso) await this.sla.liberarExcluidos(aviso);
+    const permitidosFinales = new Set(
+      await this.excepciones.permitidos(datos.informes.map((informe) => informe.idInforme)),
+    );
+    datos.informes = datos.informes.filter((informe) => permitidosFinales.has(informe.idInforme));
+    if (!datos.informes.length) return false;
     const resultado = await this.transporte.sendMail({
       from: cfg.remitente,
       to: destinatarios.join(', '),
@@ -353,6 +380,12 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
         const aviso = await this.programadas.tomarPendiente();
         if (!aviso) break;
         try {
+          await this.sla.liberarExcluidos(aviso);
+          const idInformes = await this.programadas.informesPendientes(aviso.idAviso);
+          if (!idInformes.length) {
+            await this.programadas.finalizar(aviso, []);
+            continue;
+          }
           if (aviso.estado === 'ACTIVACION') {
             await this.completarActivacion(aviso);
             continue;
@@ -365,11 +398,15 @@ export class NotificacionesCarnetService implements OnModuleInit, OnModuleDestro
             aviso.estado === 'USUARIO_SLA' &&
             (!aviso.fechaProgramada || new Date(aviso.fechaProgramada).getTime() > Date.now())
           ) {
-            throw new Error('El plazo SLA aún no vence.');
+            await this.programadas.liberarBloqueo(aviso);
+            continue;
           }
-          const idInformes = await this.programadas.informesPendientes(aviso.idAviso);
-          if (!idInformes.length) {
-            await this.programadas.finalizar(aviso, []);
+          if (
+            aviso.estado === 'USUARIO' &&
+            aviso.fechaProgramada &&
+            new Date(aviso.fechaProgramada).getTime() > Date.now()
+          ) {
+            await this.programadas.liberarBloqueo(aviso);
             continue;
           }
           let destinatarios: string[];

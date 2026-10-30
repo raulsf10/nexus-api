@@ -102,6 +102,7 @@ export class SolicitudesCarnetService {
     );
     const advertencia = await this.notificaciones.notificar({
       evento: 'creada',
+      filas,
       idSolicitud: resultado.idSolicitud,
       usuarioSolicitante: usuario.usuario,
       operacion,
@@ -148,6 +149,7 @@ export class SolicitudesCarnetService {
     );
     const advertencia = await this.notificaciones.notificar({
       evento: resultado.reapertura ? 'reabierta' : 'nueva-version',
+      filas,
       idSolicitud,
       usuarioSolicitante: solicitud.usuarioSolicitante,
       operacion: solicitud.operacion,
@@ -263,6 +265,10 @@ export class SolicitudesCarnetService {
       }
     }
     const aviso = await this.notificaciones.notificar({
+      filas: version.filas.map((fila) => ({
+        idInforme: fila.idInforme,
+        aprobada: dto.filasAprobadas.includes(fila.idFila),
+      })),
       evento:
         estado === EstadoSolicitudCarnet.RECHAZADA
           ? 'rechazada'

@@ -7,6 +7,7 @@ import { ConfiguracionService } from '../../configuracion/configuracion.service'
 import { InformesRepository } from '../informes/informes.repository';
 import { NotificacionesCarnetRepositoryOracle } from './notificaciones-carnet.repository.oracle';
 import { NotificacionesCarnetService } from './notificaciones-carnet.service';
+import { ExcepcionesNotificacionesService } from './excepciones-notificaciones.service';
 import {
   DestinatariosPersonalizadosDto,
   EnviarCorreoPersonalizadoDto,
@@ -29,6 +30,7 @@ export class CorreosPersonalizadosService {
     private readonly correos: NotificacionesCarnetService,
     private readonly configuracion: ConfiguracionService,
     private readonly informes: InformesRepository,
+    private readonly excepciones: ExcepcionesNotificacionesService,
   ) {}
 
   async consultar(dto: DestinatariosPersonalizadosDto) {
@@ -103,6 +105,7 @@ export class CorreosPersonalizadosService {
             dto.asunto,
             dto.contenido,
             audiencia.nombreInforme,
+            dto.idInforme,
           );
         } catch {
           /* Un corte SMTP puede ocurrir después de aceptar parte del mensaje. */
@@ -124,6 +127,7 @@ export class CorreosPersonalizadosService {
   }
 
   private async audiencia(idInforme: number) {
+    await this.excepciones.exigirPermitido(idInforme);
     const informe = await this.informes.obtenerPorSkVeo(idInforme);
     if (!informe) throw new ExcepcionNegocio(CodigosError.VALIDACION, 'El informe no existe.', 400);
     // Consultar directamente las excepciones: si faltan permisos, no se permite enviar.

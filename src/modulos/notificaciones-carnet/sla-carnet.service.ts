@@ -17,6 +17,7 @@ import { CambioCarnetCorreo } from './interfaces/cambio-carnet-correo.interface'
 import { NotificacionesProgramadasRepository } from './notificaciones-programadas.repository';
 import { ConfiguracionSlaService } from './configuracion-sla.service';
 import { ConfiguracionCorreoNotificacionesSeccion } from '../../configuracion/interfaces/configuracion-app.interface';
+import { ExcepcionesNotificacionesService } from './excepciones-notificaciones.service';
 
 @Injectable()
 export class SlaCarnetService {
@@ -29,6 +30,7 @@ export class SlaCarnetService {
     private readonly historial: HistorialCarnetService,
     private readonly logger: LoggerService,
     private readonly configuracionSla: ConfiguracionSlaService,
+    private readonly excepciones: ExcepcionesNotificacionesService,
   ) {}
 
   aplica(idInforme: number, cfg = this.configuracion.obtenerCorreoNotificaciones()): boolean {
@@ -41,7 +43,13 @@ export class SlaCarnetService {
     if (idInformes.length && this.configuracion.obtenerCorreoNotificaciones().escalonadosActivos) {
       await this.configuracionSla.actualizarEfectiva();
     }
-    const cfg = this.configuracion.obtenerCorreoNotificaciones();
+    const excluidos = await this.excepciones.obtenerIds();
+    const original = this.configuracion.obtenerCorreoNotificaciones();
+    const cfg = {
+      ...original,
+      informesSla: original.informesSla.filter((id) => !excluidos.has(id)),
+      reglasSla: original.reglasSla.filter((regla) => !excluidos.has(regla.idInforme)),
+    };
     if (!idInformes.some((id) => this.aplica(id, cfg))) return cfg;
     if (!(await this.programadas.disponible())) {
       throw new ExcepcionNegocio(
@@ -154,6 +162,30 @@ export class SlaCarnetService {
       throw new Error('No se puede activar antes del SLA y de confirmar el correo final.');
     }
     const detalles = await this.programadas.detallesPendientes(aviso.idAviso);
+    return this.activarDetalles(aviso, detalles, false);
+  }
+
+  async liberarExcluidos(aviso: AvisoProgramadoCarnet): Promise<void> {
+    const excluidos = await this.excepciones.obtenerIds();
+    const detalles = (await this.programadas.detallesPendientes(aviso.idAviso)).filter((detalle) =>
+      excluidos.has(detalle.idInforme),
+    );
+    if (!detalles.length) return;
+    if (aviso.slaMinutos != null) {
+      await this.activarDetalles(aviso, detalles, true);
+    } else {
+      await this.programadas.cancelarInformes(
+        aviso.idAviso,
+        detalles.map((detalle) => detalle.idInforme),
+      );
+    }
+  }
+
+  private async activarDetalles(
+    aviso: AvisoProgramadoCarnet,
+    detalles: InformePendienteCarnet[],
+    porExcepcion: boolean,
+  ): Promise<number> {
     const activados: number[] = [];
     const vigentes = await this.oracle.ejecutarEnTransaccion(async (ejecutor) => {
       const resultado: InformePendienteCarnet[] = [];
@@ -170,7 +202,8 @@ export class SlaCarnetService {
           await this.programadas.cancelarInformes(aviso.idAviso, [detalle.idInforme]);
           continue;
         }
-        if (!(await this.programadas.detalleVigente(aviso, detalle.idInforme))) continue;
+        if (!(await this.programadas.detalleVigente(aviso, detalle.idInforme, porExcepcion)))
+          continue;
         if (asignacion.activo === 0) {
           await this.carnetOracle.actualizarActivo(
             aviso.idPosicion,
@@ -186,17 +219,22 @@ export class SlaCarnetService {
     });
     for (const idInforme of activados) {
       await this.historial.registrarCambio({
-        usuario: 'SISTEMA_SLA',
+        usuario: porExcepcion ? 'SISTEMA_EXCEPCION_CORREO' : 'SISTEMA_SLA',
         accion: AccionHistorial.ACTIVAR,
         fkPosicion: aviso.idPosicion,
         fkVeo: idInforme,
         origen: aviso.origen === 'Manual' ? OrigenHistorial.MANUAL : OrigenHistorial.CARGA_MASIVA,
       });
-      this.logger.info('Informe activado al cumplir SLA y confirmar correo final.', {
-        idAviso: aviso.idAviso,
-        idPosicion: aviso.idPosicion,
-        idInforme,
-      });
+      this.logger.info(
+        porExcepcion
+          ? 'Informe activado sin correo por excepción de notificaciones.'
+          : 'Informe activado al cumplir SLA y confirmar correo final.',
+        {
+          idAviso: aviso.idAviso,
+          idPosicion: aviso.idPosicion,
+          idInforme,
+        },
+      );
     }
     let sincronizados = 0;
     for (const detalle of vigentes) {
@@ -213,11 +251,14 @@ export class SlaCarnetService {
           await this.programadas.cancelarInformes(aviso.idAviso, [detalle.idInforme]);
           return;
         }
-        if (!(await this.programadas.detalleVigente(aviso, detalle.idInforme))) return;
+        if (!(await this.programadas.detalleVigente(aviso, detalle.idInforme, porExcepcion)))
+          return;
         if (actual.activo !== 1)
           throw new Error('La asignación fue desactivada durante el procesamiento del SLA.');
         // La fila Oracle se bloquea para no modificar el espejo de una reasignación posterior.
         await this.carnetSqlServer.actualizarActivo(aviso.idPosicion, detalle.idInforme, 1, true);
+        if (porExcepcion)
+          await this.programadas.cancelarInformes(aviso.idAviso, [detalle.idInforme]);
         sincronizados++;
       });
     }
